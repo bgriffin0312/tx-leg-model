@@ -9,6 +9,8 @@ Merges:
              2022 results (last time these were on the ballot)
       Senate (2028 seats): 2024 results
   - 2026 race flags
+  - 2024 presidential results by district (dem_pres_2p_baseline)
+  - ACS CVAP demographics (pct_white_nh, pct_black_nh, pct_hispanic, pct_other)
 
 Output:
   data/processed/districts_2026.csv
@@ -22,6 +24,26 @@ DATA_PROC = Path(__file__).parent.parent / "data" / "processed"
 
 # Senate districts up in 2026
 SENATE_2026 = {1, 2, 3, 4, 5, 9, 11, 13, 18, 19, 21, 22, 24, 26, 28, 31}
+
+
+def load_presidential(chamber: str) -> dict[int, dict]:
+    """Load 2024 presidential results by district. Returns {district: row}."""
+    path = DATA_RAW / f"tx_presidential_{chamber}_2024.csv"
+    if not path.exists():
+        print(f"  WARNING: {path.name} not found — run collect_presidential_by_district.py first")
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return {int(r["district"]): r for r in csv.DictReader(f)}
+
+
+def load_cvap(chamber: str) -> dict[int, dict]:
+    """Load ACS CVAP demographics by district. Returns {district: row}."""
+    path = DATA_RAW / f"tx_cvap_{chamber}.csv"
+    if not path.exists():
+        print(f"  WARNING: {path.name} not found — run collect_cvap_by_district.py first")
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return {int(r["district"]): r for r in csv.DictReader(f)}
 
 
 def load_csv(path: Path) -> dict[int, dict]:
@@ -50,9 +72,29 @@ def result_row(res: dict, incumbent_name: str) -> dict:
     }
 
 
+def pres_cvap_fields(pres: dict, cvap: dict) -> dict:
+    """Extract presidential and CVAP columns to add to a row."""
+    fields = {}
+    # Presidential 2024
+    fields["dem_pres_2p_baseline"] = pres.get("dem_pres_2p_baseline", "")
+    fields["trump_2p_share"] = pres.get("trump_2p_share", "")
+    fields["trump_pct_2024"] = pres.get("trump_pct", "")
+    fields["harris_pct_2024"] = pres.get("harris_pct", "")
+    # CVAP demographics
+    fields["cvap_total"] = cvap.get("cvap_total", "")
+    fields["pct_white_nh"] = cvap.get("pct_white_nh", "")
+    fields["pct_black_nh"] = cvap.get("pct_black_nh", "")
+    fields["pct_hispanic"] = cvap.get("pct_hispanic", "")
+    fields["pct_asian_nh"] = cvap.get("pct_asian_nh", "")
+    fields["pct_other"] = cvap.get("pct_other", "")
+    return fields
+
+
 def build_house() -> list[dict]:
     members = load_csv(DATA_RAW / "tx_house_members_89th.csv")
     results = load_csv(DATA_RAW / "tx_house_results_2024.csv")
+    pres_data = load_presidential("house")
+    cvap_data = load_cvap("house")
     rows = []
     for district in range(1, 151):
         m = members.get(district, {})
@@ -68,6 +110,7 @@ def build_house() -> list[dict]:
             "up_in_2026": True,
             "open_seat": "",
             "notes_2026": "",
+            **pres_cvap_fields(pres_data.get(district, {}), cvap_data.get(district, {})),
         })
     return rows
 
@@ -77,6 +120,8 @@ def build_senate() -> list[dict]:
     results_2022 = load_csv(DATA_RAW / "tx_senate_2022_results.csv") \
         if (DATA_RAW / "tx_senate_2022_results.csv").exists() else {}
     results_2024 = load_csv(DATA_RAW / "tx_senate_results_2024.csv")
+    pres_data = load_presidential("senate")
+    cvap_data = load_cvap("senate")
     rows = []
     for district in range(1, 32):
         m = members.get(district, {})
@@ -99,6 +144,7 @@ def build_senate() -> list[dict]:
             "up_in_2026": up,
             "open_seat": "True" if m.get("member", "") in ("Vacant", "") else "",
             "notes_2026": m.get("notes", ""),
+            **pres_cvap_fields(pres_data.get(district, {}), cvap_data.get(district, {})),
         })
     return rows
 

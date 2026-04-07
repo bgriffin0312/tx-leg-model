@@ -6,3 +6,4 @@ scipy
 statsmodels
 pdfplumber
 tabulate
+openpyxl

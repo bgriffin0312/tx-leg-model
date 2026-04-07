@@ -141,6 +141,25 @@ def load_governor_data() -> dict:
     return data
 
 
+def load_presidential_data() -> dict:
+    """
+    Load 2024 presidential results by district (static baseline for all years).
+    Returns dict keyed (chamber_lower, district_int) → dem_pres_2p_baseline float.
+    """
+    data = {}
+    for chamber in CHAMBERS:
+        path = DATA_RAW / f"tx_presidential_{chamber}_2024.csv"
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                district = int(row["district"])
+                val = safe_float(row.get("dem_pres_2p_baseline"))
+                if val is not None:
+                    data[(chamber, district)] = val
+    return data
+
+
 def load_finance_data() -> dict:
     """
     Load all finance CSVs.
@@ -157,6 +176,41 @@ def load_finance_data() -> dict:
                 district = int(row["district"])
                 key = (int(row["year"]), chamber, district)
                 data[key] = row
+    return data
+
+
+def load_ie_data(source: str = "combined") -> dict:
+    """
+    Load historical IE CSVs. Returns dict keyed (year, chamber_lower, district_int).
+
+    source options:
+      "combined"  — prefer tx_ies_combined_{year}.csv (PAC + SPAC merged);
+                    fall back to tx_ies_{year}.csv if combined not found
+      "pac"       — use tx_ies_pac_{year}.csv only (PAC expenditure parsing)
+      "spac"      — use tx_ies_{year}.csv only (original SPAC-based)
+    """
+    data = {}
+    for year in YEARS:
+        if source == "combined":
+            primary   = DATA_HIST / f"tx_ies_combined_{year}.csv"
+            fallback  = DATA_HIST / f"tx_ies_{year}.csv"
+            path = primary if primary.exists() else fallback
+        elif source == "pac":
+            path = DATA_HIST / f"tx_ies_pac_{year}.csv"
+        else:
+            path = DATA_HIST / f"tx_ies_{year}.csv"
+
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                chamber = row["chamber"].strip().lower()
+                district = int(row["district"])
+                key = (year, chamber, district)
+                data[key] = row
+    n_years = len({k[0] for k in data})
+    print(f"  {len(data)} IE district-year records loaded across {n_years} cycles "
+          f"(source={source})")
     return data
 
 
@@ -228,7 +282,9 @@ def build_row(year: int, chamber: str, district: int,
               governor: dict | None,
               finance: dict | None,
               prior_winner: str | None,
-              manual_inc: str | None) -> dict:
+              manual_inc: str | None,
+              dem_pres_2p_baseline: float | None = None,
+              ie: dict | None = None) -> dict:
     """
     Construct one analysis-ready row.
     Returns a dict with all output columns.
@@ -239,6 +295,7 @@ def build_row(year: int, chamber: str, district: int,
         "district": district,
         "dem_2p_share": None,
         "baseline_partisanship": None,
+        "dem_pres_2p_baseline": dem_pres_2p_baseline,
         "national_env": NATIONAL_ENV.get(year, 0.0),
         "dem_incumbent": 0,
         "rep_incumbent": 0,
@@ -246,6 +303,13 @@ def build_row(year: int, chamber: str, district: int,
         "dem_fundraising_share": None,
         "log_challenger_fundraising": None,
         "challenger_viability_flag": None,
+        # IE columns (from collect_ies_historical.py; None if no data for this year)
+        "ie_dem_share": None,    # D-favoring IEs / total IEs (0.5 if none)
+        "ie_log_total": None,    # log(total_ie_dollars + 1)
+        "ie_flag": None,         # 1 if total IEs >= $25k
+        "ie_total": None,        # raw total IE dollars
+        "ie_d_favor": None,
+        "ie_r_favor": None,
         "chamber_senate": 1 if chamber == "senate" else 0,
         "uncontested": 0,
         "contested": 0,
@@ -355,6 +419,19 @@ def build_row(year: int, chamber: str, district: int,
     else:
         row["data_completeness"] = "no_gov_no_finance"
 
+    # ---- IE data ----
+    # Districts with no IE data are left as None (not zero) so the regression
+    # can correctly distinguish "no IEs" from "IEs = 0" and handle missing data.
+    # For districts with IEs, populate all four IE columns.
+    if ie is not None:
+        row["ie_dem_share"] = safe_float(ie.get("ie_dem_share"))
+        row["ie_log_total"] = safe_float(ie.get("ie_log_total"))
+        ie_flag_raw = ie.get("ie_flag")
+        row["ie_flag"] = int(ie_flag_raw) if ie_flag_raw not in (None, "", "None") else None
+        row["ie_total"]  = safe_float(ie.get("ie_total"))
+        row["ie_d_favor"] = safe_float(ie.get("ie_d_favor"))
+        row["ie_r_favor"] = safe_float(ie.get("ie_r_favor"))
+
     return row
 
 
@@ -375,6 +452,13 @@ def build_dataset() -> list[dict]:
     finance_data = load_finance_data()
     print(f"  {len(finance_data)} finance records loaded")
 
+    print("Loading IE data (independent expenditures)...")
+    ie_data = load_ie_data(source="combined")
+
+    print("Loading presidential data (2024 static baseline)...")
+    presidential_data = load_presidential_data()
+    print(f"  {len(presidential_data)} presidential records loaded")
+
     print("Loading manual incumbency overrides...")
     manual_inc = load_manual_incumbents()
     print(f"  {len(manual_inc)} manual override entries")
@@ -391,12 +475,14 @@ def build_dataset() -> list[dict]:
                 election = election_data.get(key)
                 governor = governor_data.get(key)
                 finance = finance_data.get(key)
+                ie = ie_data.get(key)
                 prior_winner = prior_winners.get(key)
                 manual = manual_inc.get(key)
+                pres_baseline = presidential_data.get((chamber, district))
 
                 row = build_row(year, chamber, district,
                                 election, governor, finance,
-                                prior_winner, manual)
+                                prior_winner, manual, pres_baseline, ie)
                 rows.append(row)
 
     return rows
@@ -405,9 +491,10 @@ def build_dataset() -> list[dict]:
 def write_csv(rows: list[dict], path: Path):
     fields = [
         "year", "chamber", "district",
-        "dem_2p_share", "baseline_partisanship", "national_env",
+        "dem_2p_share", "baseline_partisanship", "dem_pres_2p_baseline", "national_env",
         "dem_incumbent", "rep_incumbent", "open_seat",
         "dem_fundraising_share", "log_challenger_fundraising", "challenger_viability_flag",
+        "ie_dem_share", "ie_log_total", "ie_flag", "ie_total", "ie_d_favor", "ie_r_favor",
         "chamber_senate", "uncontested", "contested", "on_ballot",
         "data_completeness", "two_party_calc_note", "gov_2p_note", "MANUAL_NEEDED",
     ]

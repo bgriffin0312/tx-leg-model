@@ -103,11 +103,27 @@ def filter_regression_sample(df: pd.DataFrame, completeness_level: str) -> pd.Da
 
     if completeness_level == "with_gov":
         df = df[df["baseline_partisanship"].notna()]
+    elif completeness_level == "with_pres":
+        df = df[df["dem_pres_2p_baseline"].notna()]
     elif completeness_level == "full":
         df = df[
-            df["baseline_partisanship"].notna() &
+            df["dem_pres_2p_baseline"].notna() &
             df["dem_fundraising_share"].notna() &
             df["log_challenger_fundraising"].notna()
+        ]
+    elif completeness_level == "with_ie":
+        df = df[
+            df["dem_pres_2p_baseline"].notna() &
+            df["ie_dem_share"].notna() &
+            df["ie_log_total"].notna()
+        ]
+    elif completeness_level == "full_ie":
+        df = df[
+            df["dem_pres_2p_baseline"].notna() &
+            df["dem_fundraising_share"].notna() &
+            df["log_challenger_fundraising"].notna() &
+            df["ie_dem_share"].notna() &
+            df["ie_log_total"].notna()
         ]
 
     df["year_numeric"] = df["year"] - 2002
@@ -129,16 +145,29 @@ def choose_completeness_level(df: pd.DataFrame, min_level: str) -> list[str]:
         return levels
 
     frac_gov = contested["baseline_partisanship"].notna().mean()
+    frac_pres = contested["dem_pres_2p_baseline"].notna().mean() \
+        if "dem_pres_2p_baseline" in contested.columns else 0.0
     frac_fin = (
         contested["dem_fundraising_share"].notna() &
         contested["log_challenger_fundraising"].notna()
     ).mean()
+    frac_ie = (
+        contested["ie_dem_share"].notna() &
+        contested["ie_log_total"].notna()
+    ).mean() if "ie_dem_share" in contested.columns else 0.0
 
     if frac_gov >= 0.6 or min_level in ("with_gov", "full"):
         levels.append("with_gov")
-    if (frac_gov >= 0.6 and frac_fin >= 0.5) or min_level == "full":
+    if frac_pres >= 0.6 or min_level in ("with_pres", "full", "with_ie", "full_ie"):
+        levels.append("with_pres")
+    if (frac_pres >= 0.6 and frac_fin >= 0.5) or min_level in ("full", "full_ie"):
         levels.append("full")
+    if frac_ie > 0.05 or min_level in ("with_ie", "full_ie"):
+        levels.append("with_ie")
+    if (frac_ie > 0.05 and frac_fin >= 0.5) or min_level == "full_ie":
+        levels.append("full_ie")
 
+    print(f"  IE data coverage: {frac_ie*100:.1f}% of contested on-ballot races")
     return levels
 
 
@@ -147,18 +176,27 @@ def choose_completeness_level(df: pd.DataFrame, min_level: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 BASE_VARS = "dem_incumbent + rep_incumbent + chamber_senate + national_env"
+IE_VARS   = "ie_dem_share + ie_log_total"
 
 FORMULAS = {
     "restricted": f"dem_2p_share ~ {BASE_VARS}",
-    "with_gov": f"dem_2p_share ~ baseline_partisanship + {BASE_VARS}",
-    "full": (f"dem_2p_share ~ baseline_partisanship + {BASE_VARS}"
-             f" + dem_fundraising_share + log_challenger_fundraising"
-             f" + challenger_viability_flag"),
+    "with_gov":   f"dem_2p_share ~ baseline_partisanship + {BASE_VARS}",
+    "with_pres":  f"dem_2p_share ~ dem_pres_2p_baseline + {BASE_VARS}",
+    "full":       (f"dem_2p_share ~ dem_pres_2p_baseline + {BASE_VARS}"
+                   f" + dem_fundraising_share + log_challenger_fundraising"
+                   f" + challenger_viability_flag"),
+    # IE models: add independent expenditure variables
+    "with_ie":    (f"dem_2p_share ~ dem_pres_2p_baseline + {BASE_VARS}"
+                   f" + {IE_VARS}"),
+    "full_ie":    (f"dem_2p_share ~ dem_pres_2p_baseline + {BASE_VARS}"
+                   f" + dem_fundraising_share + log_challenger_fundraising"
+                   f" + challenger_viability_flag + {IE_VARS}"),
 }
 
 COEF_LABELS = {
     "Intercept": "Intercept",
     "baseline_partisanship": "Baseline partisanship (gov. Dem 2p share)",
+    "dem_pres_2p_baseline": "Presidential baseline (2024 Dem 2p share)",
     "national_env": "National environment (D-R generic ballot)",
     "dem_incumbent": "Dem incumbent (vs. open seat)",
     "rep_incumbent": "Rep incumbent (vs. open seat)",
@@ -166,6 +204,9 @@ COEF_LABELS = {
     "dem_fundraising_share": "Dem fundraising share (0-1)",
     "log_challenger_fundraising": "Log(challenger fundraising + 1)",
     "challenger_viability_flag": "Challenger viability flag (>threshold)",
+    "ie_dem_share": "IE Dem share (D-favoring IEs / total IEs, 0-1)",
+    "ie_log_total": "Log(total IE dollars + 1)",
+    "ie_flag": "IE significance flag (total IEs >= $25k)",
 }
 
 
@@ -509,7 +550,186 @@ def step5_cross_validation(df: pd.DataFrame, levels: list[str]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Write output files
+# Step 6: IE temporal analysis — does the IE effect vary by era?
+# ---------------------------------------------------------------------------
+
+def step6_ie_temporal(df: pd.DataFrame) -> dict:
+    """
+    Analyze how IE coefficients change across election cycles.
+
+    Tests the specific user question: do IEs have a bigger impact in
+    earlier (pre-Citizens United) or later (post-2010) election cycles?
+
+    Runs the `with_ie` model on:
+      1. Full sample (2002-2022)
+      2. Early period (2002-2010): pre-Citizens United era
+      3. Late period  (2014-2022): post-Citizens United era
+      4. Year-by-year: leave-one-cycle-in models (single year fits, each a partial check)
+
+    Also computes incremental R² from adding IE vars to the with_pres base.
+    """
+    print(f"\n{'='*60}")
+    print("STEP 6: IE Temporal Analysis (early vs. late cycle IE effects)")
+    print(f"{'='*60}")
+
+    # Check if IE data is available
+    if "ie_dem_share" not in df.columns or df["ie_dem_share"].isna().all():
+        print("  SKIPPED: No IE data in dataset.")
+        print("  Run: python src/collect_ies_historical.py")
+        print("       python src/build_phase1_dataset.py")
+        print("  Then re-run this regression.")
+        return {}
+
+    ie_sample_full = filter_regression_sample(df, "with_ie")
+    if len(ie_sample_full) < 20:
+        print(f"  SKIPPED: Only {len(ie_sample_full)} rows with IE data (need ≥20).")
+        return {}
+
+    print(f"\n  IE data coverage: {len(ie_sample_full)} district-years with IE observations")
+
+    # Coverage by year
+    print(f"\n  IE coverage by election year:")
+    print(f"  {'Year':6s}  {'Districts w/ IE':18s}  {'Total $IE':>14s}  {'Frac all contested':>18s}")
+    print(f"  {'-'*6}  {'-'*18}  {'-'*14}  {'-'*18}")
+    contested_base = filter_regression_sample(df, "with_pres")
+    for year in YEARS:
+        yr_total = contested_base[contested_base["year"] == year]
+        yr_ie = ie_sample_full[ie_sample_full["year"] == year]
+        total_ie = yr_ie["ie_total"].sum() if "ie_total" in yr_ie.columns else 0
+        frac = len(yr_ie) / len(yr_total) if len(yr_total) > 0 else 0
+        print(f"  {year:6d}  {len(yr_ie):18d}  ${total_ie:>13,.0f}  {frac*100:17.1f}%")
+
+    # --- Full sample IE model vs base model ---
+    print(f"\n  --- Model comparison: with_pres (no IE) vs. with_ie ---")
+    fit_base = fit_model(ie_sample_full, "with_pres", "base_no_ie")
+    fit_ie   = fit_model(ie_sample_full, "with_ie",   "full_ie_vars")
+    if "error" in fit_base or "error" in fit_ie:
+        print(f"  Could not fit models on IE sample.")
+        return {}
+
+    r2_base = fit_base["r2"]
+    r2_ie   = fit_ie["r2"]
+    delta_r2 = r2_ie - r2_base
+    delta_se = fit_base["residual_se"] - fit_ie["residual_se"]
+
+    print(f"  Base model R²:    {r2_base:.4f}  (Residual SE: {fit_base['residual_se']:.4f})")
+    print(f"  + IE vars  R²:    {r2_ie:.4f}  (Residual SE: {fit_ie['residual_se']:.4f})")
+    print(f"  Incremental R²:   {delta_r2:+.4f}")
+    print(f"  SE reduction:     {delta_se:+.4f} pp  (positive = IE improves precision)")
+
+    print(f"\n  IE coefficients (full sample, n={fit_ie['n']}):")
+    ie_coefs_full = {c["variable"]: c for c in fit_ie["coefs"]}
+    for var in ["ie_dem_share", "ie_log_total"]:
+        c = ie_coefs_full.get(var)
+        if c:
+            stars = "***" if c["p"] < 0.01 else "**" if c["p"] < 0.05 else "*" if c["p"] < 0.10 else ""
+            print(f"    {var:35s} {c['coef']:+.4f}  (SE={c['se']:.4f}, p={c['p']:.3f}) {stars}")
+
+    # --- Early vs. Late comparison ---
+    print(f"\n  --- Early (2002-2010) vs. Late (2014-2022) IE coefficients ---")
+    early = ie_sample_full[ie_sample_full["year"] <= 2010]
+    late  = ie_sample_full[ie_sample_full["year"] >= 2014]
+
+    period_results = {}
+    for label, subset in [("Early 2002-2010", early), ("Late  2014-2022", late)]:
+        if len(subset) < 15:
+            print(f"  {label}: n={len(subset)} — too few for reliable fit (≥15 needed)")
+            continue
+        fit = fit_model(subset, "with_ie", label)
+        if "error" in fit:
+            print(f"  {label}: {fit['error']}")
+            continue
+        period_results[label] = fit
+        coef_map = {c["variable"]: c for c in fit["coefs"]}
+        print(f"\n  {label}:  n={fit['n']}, R²={fit['r2']:.4f}")
+        for var in ["national_env", "ie_dem_share", "ie_log_total"]:
+            c = coef_map.get(var)
+            if c:
+                stars = "***" if c["p"] < 0.01 else "**" if c["p"] < 0.05 else "*" if c["p"] < 0.10 else ""
+                print(f"    {var:35s} {c['coef']:+.4f}  (SE={c['se']:.4f}) {stars}")
+
+    # Compare IE coefficients between periods
+    ie_temporal_stability = {}
+    if "Early 2002-2010" in period_results and "Late  2014-2022" in period_results:
+        print(f"\n  --- IE coefficient temporal drift ---")
+        coef_early = {c["variable"]: c for c in period_results["Early 2002-2010"]["coefs"]}
+        coef_late  = {c["variable"]: c for c in period_results["Late  2014-2022"]["coefs"]}
+        for var in ["ie_dem_share", "ie_log_total", "national_env"]:
+            ce = coef_early.get(var)
+            cl = coef_late.get(var)
+            if ce and cl:
+                diff = cl["coef"] - ce["coef"]
+                combined_se = math.sqrt(ce["se"]**2 + cl["se"]**2)
+                stable = abs(diff) <= 2 * combined_se
+                flag = "STABLE" if stable else "UNSTABLE"
+                print(f"  {var:35s}  Early: {ce['coef']:+.4f}  Late: {cl['coef']:+.4f}  "
+                      f"Diff: {diff:+.4f}  [{flag}]")
+                ie_temporal_stability[var] = {
+                    "coef_early": ce["coef"], "se_early": ce["se"],
+                    "coef_late":  cl["coef"], "se_late":  cl["se"],
+                    "diff": diff, "temporal_stability": flag,
+                }
+
+    # --- Year-by-year incremental R² from IEs ---
+    print(f"\n  --- Incremental R² from IEs by election year ---")
+    print(f"  {'Year':6s}  {'n':>5}  {'Base R²':>8}  {'+ IE R²':>8}  {'Delta R²':>10}  "
+          f"{'SE reduction':>13}")
+    print(f"  {'-'*6}  {'-'*5}  {'-'*8}  {'-'*8}  {'-'*10}  {'-'*13}")
+    yr_ie_contributions = []
+    for year in YEARS:
+        yr_data = ie_sample_full[ie_sample_full["year"] == year]
+        if len(yr_data) < 10:
+            print(f"  {year:6d}  {len(yr_data):>5d}  (insufficient data for single-year fit)")
+            continue
+        fb = fit_model(yr_data, "with_pres", f"{year}_base")
+        fi = fit_model(yr_data, "with_ie",   f"{year}_ie")
+        if "error" in fb or "error" in fi:
+            print(f"  {year:6d}  {len(yr_data):>5d}  (model fit error)")
+            continue
+        dr2 = fi["r2"] - fb["r2"]
+        dse = fb["residual_se"] - fi["residual_se"]
+        print(f"  {year:6d}  {len(yr_data):>5d}  {fb['r2']:>8.4f}  {fi['r2']:>8.4f}  "
+              f"{dr2:>+10.4f}  {dse:>+12.4f}")
+        yr_ie_contributions.append({
+            "year": year, "n": len(yr_data),
+            "r2_base": fb["r2"], "r2_ie": fi["r2"],
+            "delta_r2": dr2, "se_reduction": dse,
+        })
+
+    # Summarize the early vs. late IE impact
+    if yr_ie_contributions:
+        early_yr = [r for r in yr_ie_contributions if r["year"] <= 2010]
+        late_yr  = [r for r in yr_ie_contributions if r["year"] >= 2014]
+        if early_yr:
+            avg_early = np.mean([r["delta_r2"] for r in early_yr])
+            print(f"\n  Average IE incremental R² — Early (2002-2010): {avg_early:+.4f}")
+        if late_yr:
+            avg_late = np.mean([r["delta_r2"] for r in late_yr])
+            print(f"  Average IE incremental R² — Late  (2014-2022): {avg_late:+.4f}")
+        if early_yr and late_yr:
+            trend = avg_late - avg_early
+            print(f"  Trend (late minus early):                       {trend:+.4f}")
+            if trend > 0.02:
+                print(f"  FINDING: IEs have a LARGER impact in later cycles (post-Citizens United)")
+                print(f"           Consistent with IE spending growing substantially after 2010.")
+            elif trend < -0.02:
+                print(f"  FINDING: IEs had a larger impact in earlier cycles (unusual — check data)")
+            else:
+                print(f"  FINDING: IE impact is relatively STABLE across cycles.")
+
+    return {
+        "r2_base_on_ie_sample": r2_base,
+        "r2_with_ie": r2_ie,
+        "incremental_r2": delta_r2,
+        "se_reduction": delta_se,
+        "ie_coefs_full": ie_coefs_full,
+        "ie_temporal_stability": ie_temporal_stability,
+        "yr_ie_contributions": yr_ie_contributions,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 7: Write output files  (was Step 6)
 # ---------------------------------------------------------------------------
 
 def write_outputs(
@@ -519,16 +739,18 @@ def write_outputs(
     recursive_results: list[dict],
     cv_results: list[dict],
     levels: list[str],
+    ie_temporal: dict | None = None,
 ):
     print(f"\n{'='*60}")
-    print("STEP 6: Writing output files")
+    print("STEP 7: Writing output files")
     print(f"{'='*60}")
 
     _write_coefficients(base_fits)
     _write_temporal_stability(rolling_comparisons)
     _write_cross_validation(cv_results)
+    _write_ie_temporal(ie_temporal)
     _write_summary(base_fits, rolling_comparisons, interaction_result,
-                   recursive_results, cv_results, levels)
+                   recursive_results, cv_results, levels, ie_temporal)
 
     print(f"\n  Output files written to: {OUTPUT}")
 
@@ -577,6 +799,36 @@ def _write_temporal_stability(comparisons: list[dict]):
     print(f"  Wrote temporal stability → {path.name}")
 
 
+def _write_ie_temporal(ie_temporal: dict | None):
+    if not ie_temporal:
+        return
+    path = OUTPUT / "phase1_ie_temporal.csv"
+    rows = ie_temporal.get("yr_ie_contributions", [])
+    if not rows:
+        return
+    fields = ["year", "n", "r2_base", "r2_ie", "delta_r2", "se_reduction"]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows([{k: round(v, 6) if isinstance(v, float) else v
+                           for k, v in r.items()} for r in rows])
+    print(f"  Wrote IE temporal analysis → {path.name}")
+
+    # Also write IE coefficient comparisons
+    stab = ie_temporal.get("ie_temporal_stability", {})
+    if stab:
+        path2 = OUTPUT / "phase1_ie_coef_stability.csv"
+        fields2 = ["variable", "coef_early", "se_early", "coef_late", "se_late",
+                   "diff", "temporal_stability"]
+        rows2 = [{"variable": var, **vals} for var, vals in stab.items()]
+        with open(path2, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fields2)
+            writer.writeheader()
+            writer.writerows([{k: round(v, 6) if isinstance(v, float) else v
+                               for k, v in r.items()} for r in rows2])
+        print(f"  Wrote IE coefficient stability → {path2.name}")
+
+
 def _write_cross_validation(cv_results: list[dict]):
     path = OUTPUT / "phase1_cross_validation.csv"
     if not cv_results:
@@ -593,7 +845,7 @@ def _write_cross_validation(cv_results: list[dict]):
 
 def _write_summary(
     base_fits, rolling_comparisons, interaction_result,
-    recursive_results, cv_results, levels
+    recursive_results, cv_results, levels, ie_temporal=None
 ):
     path = OUTPUT / "phase1_regression_summary.txt"
     lines = []
@@ -733,6 +985,63 @@ def _write_summary(
     else:
         add("  Cross-validation not available.")
 
+    # ---- IE temporal analysis ----
+    add(f"\n{'─'*70}")
+    add("INDEPENDENT EXPENDITURE ANALYSIS")
+    add("─" * 70)
+    if ie_temporal:
+        dr2   = ie_temporal.get("incremental_r2", 0)
+        dse   = ie_temporal.get("se_reduction", 0)
+        add(f"  Incremental R² from adding IE variables: {dr2:+.4f}")
+        add(f"  Residual SE reduction from IEs:          {dse:+.4f} pp")
+        add("")
+        stab = ie_temporal.get("ie_temporal_stability", {})
+        if stab:
+            add("  IE coefficient temporal stability (Early 2002-2010 vs Late 2014-2022):")
+            for var, vals in stab.items():
+                flag = vals["temporal_stability"]
+                add(f"    {var}: early={vals['coef_early']:+.4f}, "
+                    f"late={vals['coef_late']:+.4f}  [{flag}]")
+        yr_contribs = ie_temporal.get("yr_ie_contributions", [])
+        if yr_contribs:
+            early_yrs = [r for r in yr_contribs if r["year"] <= 2010]
+            late_yrs  = [r for r in yr_contribs if r["year"] >= 2014]
+            if early_yrs:
+                avg_e = np.mean([r["delta_r2"] for r in early_yrs])
+                add(f"  Average incremental R² — Early 2002-2010: {avg_e:+.4f}")
+            if late_yrs:
+                avg_l = np.mean([r["delta_r2"] for r in late_yrs])
+                add(f"  Average incremental R² — Late  2014-2022: {avg_l:+.4f}")
+                if early_yrs:
+                    add(f"  IE effect is {'LARGER' if avg_l > avg_e else 'SMALLER'} "
+                        f"in later cycles (consistent with post-Citizens United growth).")
+        ie_coefs = ie_temporal.get("ie_coefs_full", {})
+        dem_share_c = ie_coefs.get("ie_dem_share")
+        if dem_share_c:
+            add("")
+            add(f"  INTERPRETATION (ie_dem_share coefficient = {dem_share_c['coef']:+.4f}):")
+            add(f"    Moving from 50% D-IE-share to 100% (all IEs favor D) shifts")
+            add(f"    Dem vote share by {dem_share_c['coef'] * 0.5 * 100:+.2f} pp.")
+            add(f"    p-value = {dem_share_c['p']:.4f} "
+                f"({'significant' if dem_share_c['p'] < 0.05 else 'not significant'} at 5%)")
+        add("")
+        add("  RECOMMENDATION:")
+        if dr2 > 0.01 and (not ie_temporal.get("ie_coefs_full") or
+                             min(c["p"] for c in ie_temporal.get("ie_coefs_full", {}).values()
+                                 if isinstance(c, dict) and "p" in c) < 0.05):
+            add("    IE variables are statistically significant and improve model fit.")
+            add("    Include ie_dem_share + ie_log_total in Phase 2 model predictions.")
+            add("    Update REGRESSION_COEFFICIENTS in model_config.py with full_ie values.")
+        else:
+            add("    IE variables do not significantly improve model fit (yet).")
+            add("    Possible reasons: sparse pre-2010 data; IEs rare in early TX legislative races.")
+            add("    Recommend re-running after July 2026 TEC deadline with 2022 full-cycle data.")
+    else:
+        add("  IE analysis not available. Run:")
+        add("    python src/collect_ies_historical.py")
+        add("    python src/build_phase1_dataset.py")
+        add("  Then re-run this regression.")
+
     # ---- Final recommendation ----
     add(f"\n{'─'*70}")
     add("RECOMMENDED MODEL SPECIFICATION FOR PHASE 2")
@@ -789,7 +1098,8 @@ def main(min_level: str = "restricted"):
     interaction = step3_interaction_test(df, levels)
     recursive = step4_recursive(df, levels)
     cv = step5_cross_validation(df, levels)
-    write_outputs(base_fits, rolling, interaction, recursive, cv, levels)
+    ie_temporal = step6_ie_temporal(df)
+    write_outputs(base_fits, rolling, interaction, recursive, cv, levels, ie_temporal)
 
     print(f"\nPhase 1 complete.")
     print(f"See output/phase1_regression_summary.txt for the full narrative.")

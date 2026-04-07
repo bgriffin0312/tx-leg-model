@@ -1,0 +1,192 @@
+"""
+model_config.py
+
+Manually-updated configuration for the Phase 2 TX legislative election model.
+
+UPDATE TRIGGERS:
+  1. TEC filing deadline passes (Jan, Apr, Jul, Oct) — re-run collect_finance.py,
+     then update FINANCE_DATA_THROUGH below.
+  2. Generic ballot topline shifts > 1pp — check Civiqs monthly for race-specific
+     crosstabs, then update RACE_GENERIC_BALLOT_D_SHARE and GENERIC_BALLOT_UPDATED.
+
+HOW TO READ CIVIQS RACE-SPECIFIC GENERIC BALLOT:
+  Go to civiqs.com → "Congressional Generic Ballot" → filter by "Race/Ethnicity"
+  Record the Democratic 2-party share for each group:
+    D% / (D% + R%) for each racial category.
+  Use Registered Voter (RV) numbers, not Likely Voter.
+
+NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
+  - FiveThirtyEight/Silver Bulletin generic ballot tracker
+  - RealClearPolitics average
+  - The Economist model
+"""
+
+# ---------------------------------------------------------------------------
+# Generic Ballot by Race (D two-party share)
+# ---------------------------------------------------------------------------
+# These are the Democratic 2-party share of the generic congressional ballot
+# disaggregated by racial/ethnic group.
+#
+# Source: Civiqs monthly tracking (civiqs.com), Registered Voter numbers
+# Last updated: 2026-04-06
+# Topline at time of update: D+4.8 (2026-04-06)
+#
+# !!! UPDATE THESE WHEN CIVIQS PUBLISHES A NEW MONTHLY RELEASE !!!
+# !!! OR WHEN THE TOPLINE AGGREGATE SHIFTS BY MORE THAN 1PP     !!!
+
+RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
+    # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
+    "white_nh": 0.4504,
+
+    # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
+    "black_nh": 0.8321,
+
+    # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
+    # TX Hispanics in 2024 were approximately even in some districts
+    "hispanic": 0.5899,
+
+    # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
+    "other": 0.5056,
+}
+
+# Metadata — update these when you update the numbers above
+GENERIC_BALLOT_SOURCE = "DDHQ data.ddhq.io (2026-04-05); white/black/hispanic from IDs 452/446/448; other solved from topline constraint"
+GENERIC_BALLOT_UPDATED = "2026-04-06"  # ISO date
+
+# Topline D 2p share at last update — used by update_polling.py to compute shifts
+# when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
+# Run update_polling.py to refresh automatically.
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5238  # D+5.0pp (implied by racial shares above)
+
+# ---------------------------------------------------------------------------
+# National Demographic Weights (2024 exit poll / electorate composition)
+# ---------------------------------------------------------------------------
+# Used to compute the national average D share from race-specific numbers.
+# These reflect the 2024 presidential electorate composition nationally.
+# Update after each election cycle.
+
+NATIONAL_DEMO_WEIGHTS: dict[str, float] = {
+    "white_nh":  0.61,   # ~61% of 2024 electorate
+    "black_nh":  0.12,   # ~12%
+    "hispanic":  0.15,   # ~15%
+    "other":     0.12,   # Asian + AIAN + other
+}
+
+# ---------------------------------------------------------------------------
+# Phase 1 Regression Coefficients (from run_phase1_regression.py)
+# ---------------------------------------------------------------------------
+# These come from the FULL model (with finance) in output/phase1_regression_summary.txt.
+# Update after re-running the regression with the presidential baseline.
+#
+# Current values are from the RESTRICTED model (no presidential baseline yet).
+# After Task 4 (refit with presidential baseline), update with new coefficients.
+
+REGRESSION_COEFFICIENTS: dict[str, float] = {
+    # From FULL model with presidential baseline (run_phase1_regression.py output)
+    # n=268 contested races with full data (presidential + finance)
+    # R²=0.7706, Adj-R²=0.7635, Residual SE=0.0785
+    "intercept":                  0.1520,
+    "dem_pres_2p_baseline":       0.6604,
+    "dem_incumbent":              0.0600,
+    "rep_incumbent":             -0.0739,
+    "chamber_senate":            -0.0261,
+    # national_env: using with_pres model coefficient (0.0052) instead of full model (0.0027).
+    # The full model's coefficient is suppressed by finance collinearity — finance vars absorb
+    # ~48% of the environment signal. Since we're running without full dem_fundraising_share
+    # (only the binary viability flag), the finance-diluted coefficient understates env sensitivity.
+    # Switch back to 0.0027 after July TEC filing when dem_fundraising_share is fully populated.
+    "national_env":               0.0052,  # with_pres model; switch to 0.0027 post-July with full finance
+    "challenger_viability_flag":  0.0393,
+    # dem_fundraising_share: D raised / (D+R raised). From full model = +0.0624 per unit (0–1).
+    # NOTE: This coefficient is temporally unstable — early cycles (2002–2010): +0.22,
+    # late cycles (2014–2022): ~0.00. The full-model average (0.0624) is used here.
+    # Pre-primary party assignment is approximate (challenger_raised may include
+    # same-party primary opponents). Treat with caution until post-July TEC data.
+    "dem_fundraising_share":      0.0624,
+    "sigma":                      0.0785,  # residual SE from FULL model (for win probability CDF)
+}
+
+# ---------------------------------------------------------------------------
+# Viability Thresholds (early-cycle)
+# ---------------------------------------------------------------------------
+# These will be calibrated by notebooks/calibrate_early_viability.ipynb
+# after the windowed finance data (Task 1b) is collected.
+# Placeholder values below are proportional to the full-cycle thresholds.
+
+VIABILITY_THRESHOLD_POSTPRIMARY: dict[str, float] = {
+    # Full-cycle thresholds: house=$100k, senate=$250k
+    # Placeholder: ~40% of full-cycle (to be calibrated)
+    "house":   40_000,
+    "senate": 100_000,
+}
+
+VIABILITY_THRESHOLD_SEMIJUL: dict[str, float] = {
+    # Placeholder: ~70% of full-cycle (to be calibrated from July data)
+    "house":   70_000,
+    "senate": 175_000,
+}
+
+# ---------------------------------------------------------------------------
+# IE (Independent Expenditure) signal
+# ---------------------------------------------------------------------------
+# Coefficient from Phase 1 regression (full_ie model, n=102, p=0.012).
+# ie_dem_share = D-favoring IEs / total IEs (0–1 scale; 0.5 = neutral/no IEs).
+# Additive effect: COEF * IE_WEIGHT * (ie_dem_share − 0.5)
+#   → full R-favor (0.0) shifts predicted share by −0.037pp
+#   → full D-favor (1.0) shifts predicted share by +0.037pp
+#
+# IE_WEIGHT — scales signal based on how far along the cycle we are:
+#   0.5  post-runoff, May–June: early-cycle targeting, high primary noise
+#   0.75 post-July TEC filing:  semi-annual report, cleaner general-election signal
+#   1.0  October/pre-election:  full-cycle IEs, most predictive
+#
+# IE_MIN_THRESHOLD — minimum total IE $ for the adjustment to apply.
+# Below this, spending is likely routine PAC maintenance, not targeted competition.
+# Based on analysis showing meaningful targeting starts around $50K–$200K.
+#
+# !!! UPDATE IE_WEIGHT AFTER EACH TEC FILING !!!
+#   After July filing  → IE_WEIGHT = 0.75
+#   After October filing → IE_WEIGHT = 1.0
+# !!! UPDATE IE_DATA_THROUGH WHEN RUNNING collect_ies_2026.py !!!
+
+IE_COEFFICIENT:   float = 0.074     # from full_ie regression (with_ie model p=0.000)
+IE_MIN_THRESHOLD: float = 50_000    # $50K minimum total IEs for signal to apply
+IE_WEIGHT:        float = 0.5       # post-runoff; update to 0.75 after July TEC filing
+IE_DATA_THROUGH:  str   = "2026-04-06"  # update when re-running collect_ies_2026.py
+
+# ---------------------------------------------------------------------------
+# Finance data currency
+# ---------------------------------------------------------------------------
+FINANCE_DATA_THROUGH = "2026-03-31"  # last TEC filing deadline captured
+FINANCE_CUTOFF_POSTPRIMARY = "20260430"  # April 30 cutoff for early-cycle flag
+
+# ---------------------------------------------------------------------------
+# Model scenarios
+# ---------------------------------------------------------------------------
+# National environment dial: ABSOLUTE D-R generic ballot margin (percentage points).
+# This is calibrated the same way the regression's national_env was estimated —
+# the training data used absolute generic ballot values (R+4.6, D+8.6, etc.).
+#
+# Reference points:
+#   2024 election: approx. R+1 to neutral (generic ballot polling in Nov 2024)
+#   Current (Apr 2026): D+4.8 — see GENERIC_BALLOT_TOPLINE_D_2P above
+#   2018 Dem wave: D+8.6
+#
+# The current environment is automatically added as a labeled scenario in model.py.
+# ENV_SCENARIOS are the fixed reference points for comparison.
+#
+# e.g.:
+#  -3 → R+3 national environment (worse than 2024)
+#   0 → neutral / 2024-like environment
+#  +3 → D+3 national environment (modest Dem lean)
+#  +5 → approximately current environment (Apr 2026 ≈ D+4.8)
+#  +8 → strong D wave (2018-level)
+
+ENV_SCENARIOS: list[int] = [-3, 0, 3, 5, 8]
+
+# Monte Carlo simulation count
+N_SIMULATIONS: int = 10_000
+
+# Chamber control thresholds (seats needed for majority)
+HOUSE_MAJORITY: int = 76   # out of 150
+SENATE_MAJORITY: int = 16  # out of 31
