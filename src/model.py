@@ -204,7 +204,11 @@ def _get_war_lookup() -> dict[tuple[str, str], float]:
 # Load district data
 # ---------------------------------------------------------------------------
 
+_SENATE_D_HOLDOVER = 0  # set by load_districts()
+
+
 def load_districts() -> pd.DataFrame:
+    global _SENATE_D_HOLDOVER
     path = DATA_PROC / "districts_2026.csv"
     if not path.exists():
         raise FileNotFoundError(
@@ -215,11 +219,21 @@ def load_districts() -> pd.DataFrame:
     df["district"] = df["district"].astype(int)
     df["chamber_lower"] = df["chamber"].str.lower()
 
+    # Count holdover D Senate seats (not on 2026 ballot, safely D)
+    senate_all = df[df["chamber_lower"] == "senate"]
+    _SENATE_D_HOLDOVER = int(
+        ((senate_all["up_in_2026"] != True) & (senate_all["incumbent_party"] == "D")).sum()
+    )
+
     # Only project races that are up in 2026
     df = df[df["up_in_2026"] == True].copy()
+    n_senate = (df['chamber_lower'] == 'senate').sum()
+    senate_need = SENATE_MAJORITY - _SENATE_D_HOLDOVER
     print(f"Loaded {len(df)} districts on the 2026 ballot "
           f"({(df['chamber_lower']=='house').sum()} House, "
-          f"{(df['chamber_lower']=='senate').sum()} Senate)")
+          f"{n_senate} Senate)")
+    print(f"  Senate: {_SENATE_D_HOLDOVER} holdover D seats + {n_senate} on ballot "
+          f"-> D needs {senate_need} wins for majority")
     return df
 
 
@@ -492,7 +506,7 @@ def run_monte_carlo(df: pd.DataFrame,
         "house_seat_dist": house_seat_dist,
         "senate_seat_dist": senate_seat_dist,
         "house_control_prob": (house_seat_dist >= HOUSE_MAJORITY).mean(),
-        "senate_control_prob": (senate_seat_dist >= SENATE_MAJORITY).mean(),
+        "senate_control_prob": (senate_seat_dist >= (SENATE_MAJORITY - _SENATE_D_HOLDOVER)).mean(),
         "expected_house_seats": house_seat_dist.mean(),
         "expected_senate_seats": senate_seat_dist.mean(),
     }
@@ -521,8 +535,11 @@ def print_scenario_summary(env_dial: float, result: dict, df: pd.DataFrame):
           f"(need {HOUSE_MAJORITY} for majority)")
     print(f"  P(D controls House):       {result['house_control_prob']*100:.1f}%")
     print()
-    print(f"  Expected D Senate seats:   {result['expected_senate_seats']:.1f} / 16 on ballot "
-          f"(need {SENATE_MAJORITY} total for majority)")
+    senate_need = SENATE_MAJORITY - _SENATE_D_HOLDOVER
+    total_expected = result['expected_senate_seats'] + _SENATE_D_HOLDOVER
+    print(f"  Expected D Senate seats:   {total_expected:.1f} / 31 "
+          f"({result['expected_senate_seats']:.1f} from 16 on ballot + {_SENATE_D_HOLDOVER} holdover, "
+          f"need {senate_need} wins for majority)")
     print(f"  P(D controls Senate):      {result['senate_control_prob']*100:.1f}%")
 
     # Show most competitive districts
@@ -673,11 +690,11 @@ def save_scenario_output(results_by_scenario: dict, df: pd.DataFrame):
             "house_seats_p75": int(np.percentile(hd, 75)),
             "house_seats_p90": int(np.percentile(hd, 90)),
             "house_control_prob": round(result["house_control_prob"], 4),
-            "expected_senate_seats": round(result["expected_senate_seats"], 1),
-            "senate_seats_p10": int(np.percentile(sd, 10)),
-            "senate_seats_p25": int(np.percentile(sd, 25)),
-            "senate_seats_p75": int(np.percentile(sd, 75)),
-            "senate_seats_p90": int(np.percentile(sd, 90)),
+            "expected_senate_seats": round(result["expected_senate_seats"] + _SENATE_D_HOLDOVER, 1),
+            "senate_seats_p10": int(np.percentile(sd, 10)) + _SENATE_D_HOLDOVER,
+            "senate_seats_p25": int(np.percentile(sd, 25)) + _SENATE_D_HOLDOVER,
+            "senate_seats_p75": int(np.percentile(sd, 75)) + _SENATE_D_HOLDOVER,
+            "senate_seats_p90": int(np.percentile(sd, 90)) + _SENATE_D_HOLDOVER,
             "senate_control_prob": round(result["senate_control_prob"], 4),
         })
     summary_df = pd.DataFrame(summary_rows)
@@ -795,10 +812,11 @@ def main():
     print(f"  {'-'*22}  {'-'*8}  {'-'*9}  {'-'*9}  {'-'*7}")
     for env_dial, result in sorted(results_by_scenario.items()):
         label = _env_label(env_dial)
+        total_senate = result['expected_senate_seats'] + _SENATE_D_HOLDOVER
         print(f"  {label:22s}  "
               f"{result['expected_house_seats']:7.1f}   "
               f"{result['house_control_prob']*100:7.1f}%    "
-              f"{result['expected_senate_seats']:7.1f}    "
+              f"{total_senate:7.1f}    "
               f"{result['senate_control_prob']*100:6.1f}%")
 
     if args.show_districts and results_by_scenario:
@@ -852,7 +870,8 @@ def main():
                                     np.percentile(lo["house_seat_dist"], 90)),
             ("P10-P90 spread",      np.percentile(hi["house_seat_dist"], 90) - np.percentile(hi["house_seat_dist"], 10),
                                     np.percentile(lo["house_seat_dist"], 90) - np.percentile(lo["house_seat_dist"], 10)),
-            ("Expected D Senate",   hi["expected_senate_seats"],  lo["expected_senate_seats"]),
+            ("Expected D Senate",   hi["expected_senate_seats"] + _SENATE_D_HOLDOVER,
+                                    lo["expected_senate_seats"] + _SENATE_D_HOLDOVER),
         ]
 
         for label, hi_val, lo_val in metrics:
