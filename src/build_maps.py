@@ -55,18 +55,18 @@ DIST_FIELD = {
     "senate": "SLDUST",
 }
 
-# Color scale: red (R) → white (tossup) → blue (D)
-# Plotly colorscale format: [[position, color], ...]
+# Color scale: Wikipedia election convention — red (R) → gray (tossup) → blue (D)
+# Category boundaries: Safe=0/10%, Likely=10/25%, Lean=25/40%, Tossup=40/60%
 COLORSCALE = [
-    [0.00, "#B22222"],   # firebrick — Safe R
-    [0.15, "#D9534F"],   # soft red — Likely R
-    [0.35, "#F4A58A"],   # salmon — Lean R
-    [0.45, "#FDE8DC"],   # very light — near tossup R
-    [0.50, "#F5F5F5"],   # near white — tossup
-    [0.55, "#D8E8F8"],   # very light blue — near tossup D
-    [0.65, "#6AACD4"],   # medium blue — Lean D
-    [0.85, "#3170A7"],   # blue — Likely D
-    [1.00, "#08306B"],   # dark navy — Safe D
+    [0.00, "#800000"],   # Safe R — dark maroon
+    [0.10, "#AA0000"],   # Likely R — medium red
+    [0.25, "#D40000"],   # Lean R — bright red
+    [0.40, "#F0A09A"],   # near tossup R — pale salmon
+    [0.50, "#E8E8E8"],   # Tossup — neutral gray
+    [0.60, "#9ABBE0"],   # near tossup D — pale blue
+    [0.75, "#1666CB"],   # Lean D — medium blue
+    [0.90, "#0645B4"],   # Likely D — bright blue
+    [1.00, "#002B84"],   # Safe D — dark navy
 ]
 
 # Rating bands for hover text
@@ -78,6 +78,28 @@ def win_prob_label(p: float) -> str:
     if p >= 0.25: return "Lean R"
     if p >= 0.05: return "Likely R"
     return "Safe R"
+
+
+# ---------------------------------------------------------------------------
+# Load scenario seat-count summary
+# ---------------------------------------------------------------------------
+
+def load_summary_lookup() -> dict:
+    """Return {scenario_label: {expected_house_seats, ...}} from model_2026_summary.csv."""
+    path = OUTPUT / "model_2026_summary.csv"
+    if not path.exists():
+        return {}
+    import pandas as _pd
+    df = _pd.read_csv(path)
+    lookup = {}
+    for _, row in df.iterrows():
+        lookup[row["scenario"]] = {
+            "expected_house_seats":  float(row["expected_house_seats"]),
+            "expected_senate_seats": float(row["expected_senate_seats"]),
+            "house_control_prob":    float(row["house_control_prob"]),
+            "senate_control_prob":   float(row["senate_control_prob"]),
+        }
+    return lookup
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +190,29 @@ def load_scenarios(chamber: str) -> pd.DataFrame:
     # Keep scenario columns in sorted order
     scenario_cols = [s for _, s in scenario_list if s in wide.columns]
 
+    # Override win_prob_d for uncontested races (no opponent filed)
+    cand_path = ROOT / "data" / "processed" / "candidates_2026.csv"
+    if cand_path.exists():
+        cand_df = pd.read_csv(cand_path)
+        ch_label = "House" if chamber == "house" else "Senate"
+        cand_ch = cand_df[cand_df["chamber"] == ch_label]
+        for _, cr in cand_ch.iterrows():
+            dist = int(cr["district"])
+            r_status = str(cr.get("r_status") or "").strip()
+            d_status = str(cr.get("d_status") or "").strip()
+            r_cand = str(cr.get("r_candidate") or "").strip() if pd.notna(cr.get("r_candidate")) else ""
+            d_cand = str(cr.get("d_candidate") or "").strip() if pd.notna(cr.get("d_candidate")) else ""
+            if r_status == "none_filed" and not r_cand:
+                # D runs unopposed → win_prob_d = 1.0
+                mask = wide["district"] == dist
+                for sc in scenario_cols:
+                    wide.loc[mask, sc] = 1.0
+            elif d_status == "none_filed" and not d_cand:
+                # R runs unopposed → win_prob_d = 0.0
+                mask = wide["district"] == dist
+                for sc in scenario_cols:
+                    wide.loc[mask, sc] = 0.0
+
     return wide, scenario_list, scenario_cols
 
 
@@ -182,6 +227,7 @@ def build_figure(
     scenario_cols: list[str],
     chamber: str,
     current_env: float,
+    summary_lookup: dict | None = None,
 ) -> go.Figure:
     """
     Build a Plotly choropleth figure with one trace per scenario and
@@ -257,12 +303,17 @@ def build_figure(
             zmin=0,
             zmax=1,
             colorbar=dict(
-                title="D Win<br>Prob",
-                tickvals=[0, 0.25, 0.5, 0.75, 1.0],
-                ticktext=["Safe R", "Likely R", "Toss-up", "Likely D", "Safe D"],
-                len=0.6,
-                thickness=14,
+                title=dict(text="D Win<br>Prob", side="right", font=dict(size=12)),
+                # 7 discrete category labels matching Wikipedia convention thresholds
+                tickvals=[0.05, 0.175, 0.325, 0.50, 0.675, 0.825, 0.95],
+                ticktext=["Safe R", "Likely R", "Lean R", "Toss-up",
+                          "Lean D", "Likely D", "Safe D"],
+                tickfont=dict(size=11),
+                len=0.70,
+                thickness=16,
                 x=1.01,
+                outlinewidth=0,
+                bgcolor="rgba(255,255,255,0.85)",
             ),
             text=make_hover(scen_label),
             hovertemplate="%{text}<extra></extra>",
@@ -291,30 +342,32 @@ def build_figure(
             method="update",
             args=[
                 {"visible": visible},
-                {"title": _make_title(chamber, scen_label, env_dial, current_env)},
+                {"title": _make_title(chamber, scen_label, env_dial, current_env,
+                                      summary_lookup)},
             ],
         ))
 
-    chamber_title = "TX House" if chamber == "house" else "TX Senate"
     current_scen_label = default_env[1]
-    title = _make_title(chamber, current_scen_label, default_env[0], current_env)
+    title = _make_title(chamber, current_scen_label, default_env[0], current_env,
+                        summary_lookup)
 
     fig = go.Figure(data=traces)
     fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor="center", font=dict(size=16)),
+        title=dict(text=title, x=0.5, xanchor="center",
+                   font=dict(size=16, family="system-ui, -apple-system, Arial, sans-serif")),
         geo=dict(
             scope="usa",
             showland=True,
-            landcolor="#F0F0F0",
+            landcolor="#ECECEC",
             showlakes=True,
-            lakecolor="#D0E8F8",
+            lakecolor="#C8DDF0",
             showcoastlines=True,
-            coastlinecolor="#AAAAAA",
+            coastlinecolor="#BBBBBB",
             showsubunits=True,
-            subunitcolor="#888888",
+            subunitcolor="#BBBBBB",
             fitbounds="locations",
             visible=True,
-            bgcolor="#FAFAFA",
+            bgcolor="#F8F9FA",
             projection_type="albers usa",
         ),
         updatemenus=[dict(
@@ -342,20 +395,36 @@ def build_figure(
             showarrow=False,
             font=dict(size=13),
         )],
-        margin=dict(t=80, b=20, l=20, r=20),
-        height=680,
-        paper_bgcolor="white",
-        plot_bgcolor="white",
+        margin=dict(t=90, b=10, l=10, r=20),
+        height=700,
+        paper_bgcolor="#F8F9FA",
+        plot_bgcolor="#F8F9FA",
+        font=dict(family="system-ui, -apple-system, Arial, sans-serif"),
     )
 
     return fig
 
 
-def _make_title(chamber: str, scen_label: str, env_dial: float, current_env: float) -> str:
+def _make_title(chamber: str, scen_label: str, env_dial: float, current_env: float,
+                summary_lookup: dict | None = None) -> str:
     ch = "TX House" if chamber == "house" else "TX Senate"
     is_current = abs(env_dial - current_env) < 0.5
-    suffix = "  (current environment)" if is_current else ""
-    return f"2026 {ch} — D Win Probability by District<br><sup>{scen_label}{suffix}</sup>"
+    env_note = "  (current)" if is_current else ""
+
+    seat_note = ""
+    if summary_lookup and scen_label in summary_lookup:
+        s = summary_lookup[scen_label]
+        if chamber == "house":
+            exp  = s["expected_house_seats"]
+            ctrl = s["house_control_prob"] * 100
+            seat_note = f"  ·  Expected: {exp:.1f}D  ·  Majority: {ctrl:.0f}%"
+        else:
+            exp  = s["expected_senate_seats"]
+            ctrl = s["senate_control_prob"] * 100
+            seat_note = f"  ·  Expected: {exp:.1f}D on ballot  ·  Majority: {ctrl:.0f}%"
+
+    return (f"2026 {ch} — D Win Probability by District"
+            f"<br><sup>{scen_label}{env_note}{seat_note}</sup>")
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +444,9 @@ def build_chamber_map(chamber: str, current_env: float):
     print(f"  Districts with model data: {len(wide)}")
     print(f"  Default scenario: closest to D+{current_env:.1f}")
 
-    fig = build_figure(gdf, wide, scenario_list, scenario_cols, chamber, current_env)
+    summary_lookup = load_summary_lookup()
+    fig = build_figure(gdf, wide, scenario_list, scenario_cols, chamber, current_env,
+                       summary_lookup)
 
     out_path = OUTPUT / f"model_2026_map_{chamber}.html"
     fig.write_html(

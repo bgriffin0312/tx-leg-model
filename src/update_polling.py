@@ -1,312 +1,233 @@
 """
 update_polling.py
 
-Automatically fetch race-specific generic ballot data from Decision Desk HQ
-and update model_config.py.
+Update RACE_GENERIC_BALLOT_D_SHARE in model_config.py from free public polling
+crosstabs, replacing the old single-poll DDHQ snapshot approach.
 
-DATA SOURCE: Decision Desk HQ (data.ddhq.io JSON API)
-===========
-DDHQ publishes a public JSON API at data.ddhq.io with average.json endpoints
-for each poll question. The generic ballot questions with racial breakdowns are:
+SOURCE HIERARCHY:
+  PRIMARY: Economist/YouGov weekly crosstab PDFs (free, public, ~1,600 RV/week,
+    consistent methodology). We average 4 most recent weeks for stability.
+    Published at: https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_*.pdf
+    Found via: https://yougov.com/en-us/topics/topic/The_Economist_YouGov_polls
 
-  ID   5  — topline generic ballot (LV, all races)
-  ID 446  — Generic Congressional Ballot (African American)
-  ID 448  — Generic Congressional Ballot (Hispanic)
-  ID 452  — Generic Congressional Ballot (White)
+  CROSS-CHECK: Civiqs daily dashboard (free, filterable by race, but single
+    online panel with slight D lean — use for movement detection, not levels).
+    Dashboard: civiqs.com/results
 
-No DDHQ question exists for Asian/Other. That group is solved algebraically:
-  other_2p = (topline_2p − Σ[known_weight × known_2p]) / other_weight
-This constrains the weighted average of all four groups to match the topline.
-If the algebraic result is implausible (< 0.45 or > 0.85), it falls back to
-a uniform shift from the stored "other" value instead.
+  DEPRECATED: DDHQ single-poll IDs (446/448/452) — replaced by YouGov rolling
+    average for more stability. Individual poll crosstabs have large subgroup
+    margins of error — a single poll's Hispanic n might be 150-300 respondents.
+    Averaging across 4 weekly polls (~600-1,000 Hispanic respondents total)
+    reduces this noise substantially.
 
-UPDATE TRIGGERS
-===============
-  - Run this script whenever the topline generic ballot shifts ≥ 1pp (default).
-  - DDHQ updates their averages daily, so re-runs at any time will reflect
-    the latest data.
+  ASPIRATIONAL: FiftyPlusOne aggregated crosstab average — best available
+    multi-poll aggregate with house-effect correction, but requires $150/mo
+    Premium subscription. If budget allows, switch to this.
 
-USAGE
-=====
-  python src/update_polling.py              # update if ≥ 1pp topline shift
-  python src/update_polling.py --force      # always update
-  python src/update_polling.py --check      # show current data, don't update
-  python src/update_polling.py --dry-run    # show what would change
-  python src/update_polling.py --threshold 2.0  # custom trigger (default 1.0pp)
+KNOWN LIMITATIONS:
+  - YouGov is a single pollster (online panel), so you get their house effect
+    rather than a multi-poll average. The 4-week rolling average reduces
+    sampling noise but not systematic bias.
+  - "Other/Asian" is solved from the topline constraint because pollster
+    reporting of this group is inconsistent and sample sizes are small.
+  - The improvement over DDHQ is consistency: YouGov gives a reliable weekly
+    time series with known methodology, vs pulling from whichever single poll
+    DDHQ happened to post.
+
+USAGE:
+  python src/update_polling.py                  # dry run: show comparison
+  python src/update_polling.py --apply          # update model_config.py
+  python src/update_polling.py --force-download # bypass PDF cache
 """
 
 import argparse
-import json
+import io
 import re
 import sys
 from datetime import date
 from pathlib import Path
 
+import pdfplumber
 import requests
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-MODEL_CONFIG_PATH = Path(__file__).parent / "model_config.py"
+ROOT = Path(__file__).parent.parent
+DATA_RAW = ROOT / "data" / "raw"
+CACHE_DIR = DATA_RAW / "yougov_crosstabs"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-USER_AGENT = "TX-Legislature-Model/1.0 (research; contact via GitHub)"
-TIMEOUT = 20
+sys.path.insert(0, str(Path(__file__).parent))
 
-# DDHQ JSON API base
-DDHQ_API = "https://data.ddhq.io/polls/v1/production/{qid}/average.json"
+# Known recent Economist/YouGov PDF URLs (most recent first).
+# Update this list when new polls are published; the article pages at
+# yougov.com/en-us/topics/topic/The_Economist_YouGov_polls link to them.
+# URL pattern: https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_[ID].pdf
+YOUGOV_PDFS = [
+    ("2026-03-27_to_30", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_3wplfYX.pdf"),
+    ("2026-03-20_to_23", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_o84FoNw.pdf"),
+    ("2026-03-13_to_16", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_CwWXhS2.pdf"),
+    ("2026-03-06_to_09", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_EcCnfRV.pdf"),
+]
 
-# Question IDs — discovered by inspecting embedded JSON in DDHQ page HTML
-DDHQ_QUESTIONS = {
-    "topline":   5,    # Generic Congressional Ballot (LV, all)
-    "black_nh":  446,  # Generic Congressional Ballot (African American)
-    "hispanic":  448,  # Generic Congressional Ballot (Hispanic)
-    "white_nh":  452,  # Generic Congressional Ballot (White)
-    # No DDHQ question for Asian/Other — derived algebraically from others
-}
-
-# National demographic weights (from model_config.py — must match)
-NATIONAL_DEMO_WEIGHTS = {
-    "white_nh": 0.61,
-    "black_nh":  0.12,
-    "hispanic":  0.15,
-    "other":     0.12,
-}
-
-# Plausible range for the "other" algebraic solution
-OTHER_D_2P_MIN = 0.45
-OTHER_D_2P_MAX = 0.85
+USER_AGENT = "TXLegislativeModel/1.0 (academic research)"
 
 
 # ---------------------------------------------------------------------------
-# DDHQ API fetch
+# Download and cache PDFs
 # ---------------------------------------------------------------------------
 
-def _fetch_ddhq_question(qid: int) -> dict | None:
-    """
-    Fetch and parse a DDHQ average.json for one poll question.
-    Returns {title, d_pct, r_pct, d_2p, date} or None on failure.
-    """
-    url = DDHQ_API.format(qid=qid)
+def download_pdf(label: str, url: str, force: bool = False) -> bytes | None:
+    cache_path = CACHE_DIR / f"{label}.pdf"
+    if cache_path.exists() and not force:
+        print(f"  Cache hit: {label}")
+        return cache_path.read_bytes()
+
+    print(f"  Downloading {label}...")
     try:
-        r = requests.get(url, headers={"User-Agent": USER_AGENT},
-                         timeout=TIMEOUT, verify=False)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as exc:
-        print(f"    ERROR fetching ID {qid}: {exc}")
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
+        resp.raise_for_status()
+        cache_path.write_bytes(resp.content)
+        print(f"    {len(resp.content):,} bytes")
+        return resp.content
+    except requests.RequestException as e:
+        print(f"    FAILED: {e}")
         return None
 
-    title = data.get("title", f"ID {qid}")
 
-    # Build cand_id → poll_ag_name map from option_candidate_map
-    cand_party = {}   # cand_id (int) → "Democrat" | "Republican"
-    for opt_id, cands in data.get("option_candidate_map", {}).items():
-        for cand_id_str, cand in cands.items():
-            label = cand.get("poll_ag_name", "")
-            if "Democrat" in label:
-                cand_party[int(cand_id_str)] = "D"
-            elif "Republican" in label:
-                cand_party[int(cand_id_str)] = "R"
+# ---------------------------------------------------------------------------
+# Extract generic ballot by race from PDF
+# ---------------------------------------------------------------------------
 
-    # Most recent timeseries entry
-    ts = data.get("timeseries", [])
-    if not ts:
-        print(f"    No timeseries data for '{title}'")
-        return None
+def extract_generic_ballot_race(pdf_bytes: bytes) -> dict | None:
+    """
+    Parse the GenericCongressionalVote question's race crosstab from a
+    YouGov econTabReport PDF.
 
-    latest = ts[-1]
-    latest_date = latest.get("date", "?")
-    d_pct = r_pct = None
+    The PDF page looks like:
+      41. GenericCongressionalVote
+      If the elections for U.S. Congress were being held today...
+                            Sex           Race            Age      Education
+      Total Male Female White Black Hispanic 18-29 30-44 45-64 65+ ...
+      TheDemocraticPartycandidate  39%  33%  44%  34%  65%  41%  ...
+      TheRepublicanPartycandidate  36%  43%  29%  43%   6%  34%  ...
 
-    for entry in latest.get("data", []):
-        cid = entry.get("cand_id")
-        val = entry.get("value")
-        if val is None:
+    Returns dict with white/black/hispanic dem/rep percentages, or None.
+    """
+    pdf = pdfplumber.open(io.BytesIO(pdf_bytes))
+
+    # Extract date range from first page
+    date_range = ""
+    first_text = pdf.pages[0].extract_text() or ""
+    m = re.search(r"(\w+ \d+ [- ] \d+, \d{4})", first_text)
+    if m:
+        date_range = m.group(1)
+
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        if "GenericCongressionalVote" not in text and "genericcongressionalvote" not in text.lower():
             continue
-        party = cand_party.get(cid)
-        if party == "D":
-            d_pct = val
-        elif party == "R":
-            r_pct = val
 
-    if d_pct is None or r_pct is None:
-        print(f"    Could not extract D/R values for '{title}'")
-        return None
+        lines = text.split("\n")
 
-    denom = d_pct + r_pct
-    d_2p = d_pct / denom if denom > 0 else None
+        # Find key rows — the column header row contains "Total Male Female White..."
+        # and the data rows contain percentages. Be specific to avoid matching
+        # the category label row ("Sex Race Age Education").
+        header_line = None
+        dem_line = None
+        rep_line = None
+        n_line = None
 
-    return {
-        "title": title,
-        "d_pct": d_pct,
-        "r_pct": r_pct,
-        "d_2p": d_2p,
-        "date": latest_date,
-        "qid": qid,
-    }
+        for line in lines:
+            # Header: must contain "Total" AND "White" AND "Black" (the column header,
+            # not the category label "Sex Race Age Education")
+            if "Total" in line and "White" in line and "Black" in line and "Hispanic" in line:
+                header_line = line
+            elif "DemocraticParty" in line.replace(" ", ""):
+                # Take only the FIRST Dem line (race table, not party/ideology table)
+                if dem_line is None:
+                    dem_line = line
+            elif "RepublicanParty" in line.replace(" ", ""):
+                if rep_line is None:
+                    rep_line = line
+            elif "UnweightedN" in line.replace(" ", ""):
+                if n_line is None:
+                    n_line = line
 
+        if not (header_line and dem_line and rep_line):
+            continue
 
-def fetch_all_ddhq() -> dict | None:
-    """
-    Fetch topline + all three DDHQ racial questions.
-    Returns dict keyed by model_config race key → d_2p share,
-    plus 'topline_d_2p' and 'data_date'.
-    """
-    print("Fetching from DDHQ JSON API (data.ddhq.io)...")
-    results = {}
+        # Extract percentages
+        def extract_pcts(line: str) -> list[float]:
+            return [float(p) for p in re.findall(r"(\d+)%", line)]
 
-    for key, qid in DDHQ_QUESTIONS.items():
-        q = _fetch_ddhq_question(qid)
-        if q is None:
-            print(f"  FAILED: {key} (ID {qid})")
-            return None
-        results[key] = q
-        label = key if key != "topline" else "topline (LV)"
-        print(f"  {label:12s}  D={q['d_pct']:.1f}%  R={q['r_pct']:.1f}%  "
-              f"→  D 2p: {q['d_2p']*100:.1f}%  [{q['date']}]")
+        dem_pcts = extract_pcts(dem_line)
+        rep_pcts = extract_pcts(rep_line)
 
-    topline_2p   = results["topline"]["d_2p"]
-    white_2p     = results["white_nh"]["d_2p"]
-    black_2p     = results["black_nh"]["d_2p"]
-    hispanic_2p  = results["hispanic"]["d_2p"]
+        # Parse header columns
+        headers = re.split(r"\s+", header_line.strip())
+        col_map = {h.lower(): i for i, h in enumerate(headers)}
 
-    # Solve for "other" algebraically:
-    #   topline_2p = Σ(weight × 2p)
-    #   topline_2p = w_wh×white + w_bl×black + w_hi×hisp + w_ot×other
-    #   other = (topline_2p - w_wh×white - w_bl×black - w_hi×hisp) / w_ot
-    w = NATIONAL_DEMO_WEIGHTS
-    other_2p = (
-        topline_2p
-        - w["white_nh"] * white_2p
-        - w["black_nh"] * black_2p
-        - w["hispanic"] * hispanic_2p
-    ) / w["other"]
+        white_idx = col_map.get("white")
+        black_idx = col_map.get("black")
+        hisp_idx = col_map.get("hispanic")
 
-    if OTHER_D_2P_MIN <= other_2p <= OTHER_D_2P_MAX:
-        print(f"  {'other':12s}                        "
-              f"→  D 2p: {other_2p*100:.1f}%  [solved from topline constraint]")
-        other_source = "solved"
-    else:
-        # Implausible result — fall back to stored + uniform shift
-        other_2p = None
-        print(f"  other: algebraic solution {other_2p} out of plausible range "
-              f"[{OTHER_D_2P_MIN}, {OTHER_D_2P_MAX}] — will use uniform shift for this group")
-        other_source = "shift"
+        if white_idx is None or black_idx is None or hisp_idx is None:
+            print(f"    Could not find race columns in header: {headers}")
+            continue
 
-    return {
-        "white_nh":       round(white_2p, 4),
-        "black_nh":       round(black_2p, 4),
-        "hispanic":       round(hispanic_2p, 4),
-        "other":          round(other_2p, 4) if other_2p is not None else None,
-        "topline_d_2p":   round(topline_2p, 4),
-        "topline_margin": _margin_label(topline_2p),
-        "data_date":      results["topline"]["date"],
-        "other_source":   other_source,
-    }
+        max_needed = max(white_idx, black_idx, hisp_idx)
+        if len(dem_pcts) <= max_needed or len(rep_pcts) <= max_needed:
+            print(f"    Not enough columns ({len(dem_pcts)} found, need {max_needed + 1})")
+            continue
 
+        result = {
+            "white":    {"dem": dem_pcts[white_idx], "rep": rep_pcts[white_idx]},
+            "black":    {"dem": dem_pcts[black_idx], "rep": rep_pcts[black_idx]},
+            "hispanic": {"dem": dem_pcts[hisp_idx],  "rep": rep_pcts[hisp_idx]},
+            "total":    {"dem": dem_pcts[0],          "rep": rep_pcts[0]},
+            "date_range": date_range,
+        }
 
-def _margin_label(d_2p: float) -> str:
-    margin_pp = (d_2p - 0.5) * 200
-    sign = "D" if margin_pp >= 0 else "R"
-    return f"{sign}+{abs(margin_pp):.1f}"
+        if n_line:
+            n_match = re.search(r"\((\d[\d,]*)\)", n_line)
+            if n_match:
+                result["sample_size"] = int(n_match.group(1).replace(",", ""))
+
+        pdf.close()
+        return result
+
+    pdf.close()
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Read and update model_config.py
+# Compute rolling average and compare to current config
 # ---------------------------------------------------------------------------
 
-def read_current_config() -> dict:
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("model_config", MODEL_CONFIG_PATH)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return {
-        "race_generic":  getattr(mod, "RACE_GENERIC_BALLOT_D_SHARE", {}),
-        "source":        getattr(mod, "GENERIC_BALLOT_SOURCE", ""),
-        "updated":       getattr(mod, "GENERIC_BALLOT_UPDATED", ""),
-        "topline_d_2p":  getattr(mod, "GENERIC_BALLOT_TOPLINE_D_2P", None),
-    }
+def compute_d_2p(dem: float, rep: float) -> float:
+    """D two-party share from raw D% and R% (ignoring undecided/other)."""
+    return dem / (dem + rep) if (dem + rep) > 0 else 0.5
 
 
-def compute_weighted_topline(race_shares: dict) -> float:
-    return sum(NATIONAL_DEMO_WEIGHTS[k] * race_shares.get(k, 0)
-               for k in NATIONAL_DEMO_WEIGHTS)
+def solve_other_from_topline(white_d2p: float, black_d2p: float, hisp_d2p: float,
+                              topline_d2p: float) -> float:
+    """
+    Back-solve for other/Asian D 2p share from the topline constraint.
+    topline ≈ Σ(weight × group_d2p), so:
+    other_d2p = (topline - w*white - b*black - h*hisp) / w_other
 
-
-def update_model_config(new_shares: dict, new_topline: float,
-                        source: str, margin_label: str,
-                        dry_run: bool = False) -> bool:
-    config_text = MODEL_CONFIG_PATH.read_text(encoding="utf-8")
-    today = str(date.today())
-
-    # Update each racial D share value — only within RACE_GENERIC_BALLOT_D_SHARE block
-    # Strategy: replace the entire dict literal so we don't touch NATIONAL_DEMO_WEIGHTS
-    def replace_in_race_dict(text: str, key: str, value: float) -> str:
-        """Replace a key's value only within the RACE_GENERIC_BALLOT_D_SHARE dict."""
-        # Match from RACE_GENERIC_BALLOT_D_SHARE up to its closing }
-        # Then within that match, replace the key's value
-        block_pat = r'(RACE_GENERIC_BALLOT_D_SHARE\s*:[^=]*=\s*\{[^}]*\})'
-
-        def replace_key_in_block(m):
-            block = m.group(1)
-            key_pat = rf'("{re.escape(key)}"\s*:\s*)([\d.]+)'
-            new_block = re.sub(key_pat, rf'\g<1>{value:.4f}', block)
-            return new_block
-
-        new_text = re.sub(block_pat, replace_key_in_block, text, flags=re.DOTALL)
-        return new_text
-
-    for key, value in new_shares.items():
-        new_text = replace_in_race_dict(config_text, key, value)
-        if new_text == config_text:
-            print(f"  WARNING: Could not find '{key}' in RACE_GENERIC_BALLOT_D_SHARE")
-        config_text = new_text
-
-    # Update metadata strings
-    config_text = re.sub(
-        r'(GENERIC_BALLOT_SOURCE\s*=\s*)["\'].*?["\']',
-        rf'\1"{source}"',
-        config_text,
-    )
-    config_text = re.sub(
-        r'(GENERIC_BALLOT_UPDATED\s*=\s*)["\'].*?["\']',
-        rf'\1"{today}"',
-        config_text,
-    )
-
-    # Update or insert GENERIC_BALLOT_TOPLINE_D_2P
-    topline_val = round(new_topline, 4)
-    topline_pattern = r'(GENERIC_BALLOT_TOPLINE_D_2P\s*:\s*float\s*=\s*)[\d.]+'
-    if re.search(topline_pattern, config_text):
-        config_text = re.sub(topline_pattern, rf'\g<1>{topline_val}', config_text)
-    else:
-        insert_after = r'(GENERIC_BALLOT_UPDATED\s*=\s*"[^"]*"\s*\n)'
-        config_text = re.sub(
-            insert_after,
-            rf'\1\nGENERIC_BALLOT_TOPLINE_D_2P: float = {topline_val}  # {margin_label}\n',
-            config_text, count=1,
-        )
-
-    # Update "Topline at time of update" comment if present
-    config_text = re.sub(
-        r'(#\s*Topline at time of update:).*',
-        rf'\1 {margin_label} ({today})',
-        config_text,
-    )
-
-    if dry_run:
-        print("\n  [DRY RUN] Changes that would be written to model_config.py:")
-        print(f"    GENERIC_BALLOT_TOPLINE_D_2P = {topline_val}  # {margin_label}")
-        print(f"    GENERIC_BALLOT_UPDATED      = '{today}'")
-        print(f"    GENERIC_BALLOT_SOURCE       = '{source}'")
-        for k, v in new_shares.items():
-            print(f"    RACE_GENERIC_BALLOT_D_SHARE['{k}'] = {v:.4f}")
-        return False
-
-    MODEL_CONFIG_PATH.write_text(config_text, encoding="utf-8")
-    return True
+    FiftyPlusOne's known limitation: "other/Asian" can't be reliably estimated
+    from individual polls due to small sample sizes. This topline-constraint
+    solve is the correct workaround.
+    """
+    from model_config import NATIONAL_DEMO_WEIGHTS as w
+    numerator = topline_d2p - (w["white_nh"] * white_d2p +
+                                w["black_nh"] * black_d2p +
+                                w["hispanic"] * hisp_d2p)
+    if w["other"] > 0:
+        return max(0.0, min(1.0, numerator / w["other"]))
+    return 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -315,115 +236,152 @@ def update_model_config(new_shares: dict, new_topline: float,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fetch DDHQ generic ballot by race and update model_config.py"
-    )
-    parser.add_argument("--force", action="store_true",
-                        help="Update even if topline shift < threshold")
-    parser.add_argument("--check", action="store_true",
-                        help="Print current config only; don't fetch or update")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Fetch data and show proposed changes; don't save")
-    parser.add_argument("--threshold", type=float, default=1.0,
-                        help="Topline shift (pp) to trigger update (default 1.0)")
+        description="Update racial generic ballot crosstabs from YouGov weekly polls")
+    parser.add_argument("--apply", action="store_true",
+                        help="Update model_config.py in place (default: dry run)")
+    parser.add_argument("--force-download", action="store_true",
+                        help="Re-download PDFs even if cached")
+    parser.add_argument("--n-weeks", type=int, default=4,
+                        help="Number of recent polls to average (default: 4)")
     args = parser.parse_args()
 
-    print("=" * 60)
-    print("TX LEGISLATURE MODEL — POLLING UPDATE")
-    print("Source: Decision Desk HQ (data.ddhq.io)")
-    print("=" * 60)
+    print("=" * 65)
+    print("  Update Racial Generic Ballot Crosstabs")
+    print("  Source: Economist/YouGov Weekly Poll (4-Week Rolling Average)")
+    print("=" * 65)
 
-    # Read current stored values
-    print("\nCurrent model_config.py:")
-    current = read_current_config()
-    old_shares   = current["race_generic"]
-    old_topline  = current.get("topline_d_2p")
+    # Download and parse PDFs
+    print(f"\nFetching {args.n_weeks} most recent polls...")
+    polls = []
+    for label, url in YOUGOV_PDFS[:args.n_weeks]:
+        pdf_bytes = download_pdf(label, url, force=args.force_download)
+        if not pdf_bytes:
+            continue
+        result = extract_generic_ballot_race(pdf_bytes)
+        if result:
+            polls.append(result)
+            w = compute_d_2p(result["white"]["dem"], result["white"]["rep"])
+            b = compute_d_2p(result["black"]["dem"], result["black"]["rep"])
+            h = compute_d_2p(result["hispanic"]["dem"], result["hispanic"]["rep"])
+            n = result.get("sample_size", "?")
+            print(f"    {result['date_range']:30s}  W={w:.1%}  B={b:.1%}  H={h:.1%}  n={n}")
+        else:
+            print(f"    {label}: could not extract generic ballot race data")
 
-    if old_topline is None:
-        old_topline = compute_weighted_topline(old_shares)
-        print("  (GENERIC_BALLOT_TOPLINE_D_2P not yet in config — computed from racial shares)")
-
-    print(f"  Stored topline:  {old_topline*100:.2f}% D 2p  ({_margin_label(old_topline)})")
-    print(f"  Last updated:    {current['updated']}")
-    print(f"  Source:          {current['source']}")
-    print(f"  Racial D shares: "
-          f"white={old_shares.get('white_nh',0):.3f}  "
-          f"black={old_shares.get('black_nh',0):.3f}  "
-          f"hisp={old_shares.get('hispanic',0):.3f}  "
-          f"other={old_shares.get('other',0):.3f}")
-
-    if args.check:
-        print("\n(--check mode: done)")
+    if not polls:
+        print("\nNo polls extracted. Cannot update.")
         return
 
-    # Fetch from DDHQ
-    print(f"\n{'─'*40}")
-    new_data = fetch_all_ddhq()
-    if new_data is None:
-        print("\nFetch failed. Check your internet connection.")
-        return
+    # Compute rolling average of D 2-party shares
+    avg = {}
+    for group in ["white", "black", "hispanic"]:
+        dem_avg = sum(p[group]["dem"] for p in polls) / len(polls)
+        rep_avg = sum(p[group]["rep"] for p in polls) / len(polls)
+        avg[group] = compute_d_2p(dem_avg, rep_avg)
 
-    new_topline = new_data["topline_d_2p"]
-    shift_pp    = (new_topline - old_topline) * 100
-    shift_abs   = abs(shift_pp)
-    shift_dir   = "D" if shift_pp >= 0 else "R"
+    # Topline for other/Asian solve
+    topline_dem = sum(p["total"]["dem"] for p in polls) / len(polls)
+    topline_rep = sum(p["total"]["rep"] for p in polls) / len(polls)
+    topline_d2p = compute_d_2p(topline_dem, topline_rep)
 
-    print(f"\n{'─'*40}")
-    print(f"Topline shift: {shift_dir}+{shift_abs:.2f}pp  "
-          f"({old_topline*100:.2f}% → {new_topline*100:.2f}%)")
-
-    if not args.force and shift_abs < args.threshold:
-        print(f"Shift ({shift_abs:.2f}pp) < threshold ({args.threshold:.1f}pp). No update needed.")
-        print("Run with --force to update anyway, or --threshold to lower the trigger.")
-        return
-
-    # Build final shares — handle missing "other" with uniform shift fallback
-    new_shares = {
-        "white_nh": new_data["white_nh"],
-        "black_nh": new_data["black_nh"],
-        "hispanic": new_data["hispanic"],
-    }
-
-    if new_data["other"] is not None:
-        new_shares["other"] = new_data["other"]
-        other_note = "solved from topline constraint"
-    else:
-        # Uniform shift for "other"
-        delta = new_topline - old_topline
-        other_new = round(max(0.0, min(1.0, old_shares.get("other", 0.57) + delta)), 4)
-        new_shares["other"] = other_new
-        other_note = f"uniform shift ({delta:+.4f}) from stored value"
-
-    # Summary
-    print(f"\n{'─'*40}")
-    print("Final race-specific D 2p shares:")
-    print(f"  {'Group':12s}  {'Old':>7}  {'New':>7}  {'Change':>8}  Notes")
-    for k in ["white_nh", "black_nh", "hispanic", "other"]:
-        old_v = old_shares.get(k, 0)
-        new_v = new_shares[k]
-        delta = new_v - old_v
-        notes = other_note if k == "other" else "DDHQ"
-        print(f"  {k:12s}  {old_v:.4f}  {new_v:.4f}  {delta:+.4f}  {notes}")
-
-    implied_avg = compute_weighted_topline(new_shares)
-    print(f"\n  Weighted-avg check: {implied_avg*100:.2f}% D 2p  "
-          f"(DDHQ topline: {new_topline*100:.2f}%)")
-
-    source_str = (
-        f"DDHQ data.ddhq.io ({new_data['data_date']}); "
-        f"white/black/hispanic from IDs 452/446/448; other {other_note}"
+    avg["other"] = solve_other_from_topline(
+        avg["white"], avg["black"], avg["hispanic"], topline_d2p
     )
 
-    # Update model_config.py
-    print(f"\n{'─'*40}")
-    if args.dry_run:
-        update_model_config(new_shares, new_topline, source_str,
-                            new_data["topline_margin"], dry_run=True)
+    # Load current config values
+    from model_config import (
+        RACE_GENERIC_BALLOT_D_SHARE as current,
+        GENERIC_BALLOT_SOURCE,
+        GENERIC_BALLOT_UPDATED,
+        GENERIC_BALLOT_TOPLINE_D_2P,
+        NATIONAL_DEMO_WEIGHTS,
+    )
+
+    # Map config keys to poll group names
+    group_map = {
+        "white_nh": "white",
+        "black_nh": "black",
+        "hispanic": "hispanic",
+        "other":    "other",
+    }
+
+    # Compute implied topline from new values
+    new_topline = sum(
+        NATIONAL_DEMO_WEIGHTS[k] * avg[group_map[k]]
+        for k in NATIONAL_DEMO_WEIGHTS
+    )
+
+    # Print comparison
+    print(f"\n{'=' * 65}")
+    print(f"  COMPARISON: Current vs YouGov {len(polls)}-Week Average")
+    print(f"{'=' * 65}")
+    print(f"  Polls: {len(polls)} weeks ({polls[-1]['date_range']} to {polls[0]['date_range']})")
+    total_n = sum(p.get("sample_size", 0) for p in polls)
+    if total_n:
+        print(f"  Combined sample: ~{total_n:,} respondents")
+
+    print(f"\n  {'Group':15s}  {'Current':>8s}  {'YouGov':>8s}  {'Delta':>8s}  {'Flag':>5s}")
+    print(f"  {'-' * 50}")
+
+    any_shift = False
+    for config_key in ["white_nh", "black_nh", "hispanic", "other"]:
+        group = group_map[config_key]
+        old = current[config_key]
+        new = avg[group]
+        delta = new - old
+        flag = " ***" if abs(delta) > 0.01 else ""
+        if abs(delta) > 0.01:
+            any_shift = True
+        print(f"  {config_key:15s}  {old:8.1%}  {new:8.1%}  {delta:+8.1%}{flag}")
+
+    print(f"\n  {'Topline D 2p':15s}  {GENERIC_BALLOT_TOPLINE_D_2P:8.1%}  {new_topline:8.1%}  "
+          f"{new_topline - GENERIC_BALLOT_TOPLINE_D_2P:+8.1%}")
+    print(f"\n  Current source: {GENERIC_BALLOT_SOURCE}")
+    print(f"  Current date:   {GENERIC_BALLOT_UPDATED}")
+
+    if any_shift:
+        print(f"\n  *** One or more groups shifted >1pp — update recommended")
     else:
-        ok = update_model_config(new_shares, new_topline, source_str,
-                                  new_data["topline_margin"])
-        if ok:
-            print("model_config.py updated.")
-            print("Re-run projections:  python src/model.py")
+        print(f"\n  No group shifted >1pp — update not needed")
+
+    # Apply
+    if args.apply:
+        config_path = Path(__file__).parent / "model_config.py"
+        text = config_path.read_text(encoding="utf-8")
+
+        for config_key in ["white_nh", "black_nh", "hispanic", "other"]:
+            new_val = avg[group_map[config_key]]
+            pattern = rf'("{config_key}":\s*)[\d.]+'
+            text = re.sub(pattern, rf'\g<1>{new_val:.3f}', text)
+
+        today_str = date.today().isoformat()
+        date_range_str = f"{polls[-1]['date_range']} to {polls[0]['date_range']}"
+        new_source = f"Economist/YouGov {len(polls)}-week avg ({date_range_str})"
+
+        text = re.sub(
+            r'(GENERIC_BALLOT_SOURCE\s*[:=]\s*(?:str\s*=\s*)?)(["\']).*?\2',
+            rf'\1\2{new_source}\2',
+            text,
+        )
+        text = re.sub(
+            r'(GENERIC_BALLOT_UPDATED\s*[:=]\s*(?:str\s*=\s*)?)(["\']).*?\2',
+            rf'\1\2{today_str}\2',
+            text,
+        )
+        text = re.sub(
+            r'(GENERIC_BALLOT_TOPLINE_D_2P\s*[:=]\s*(?:float\s*=\s*)?)[\d.]+',
+            rf'\g<1>{new_topline:.4f}',
+            text,
+        )
+
+        config_path.write_text(text, encoding="utf-8")
+        print(f"\n  model_config.py updated:")
+        print(f"    Source:  {new_source}")
+        print(f"    Date:    {today_str}")
+        print(f"    Topline: {new_topline:.4f}")
+        print(f"\n  Re-run model: python src/model.py")
+    elif any_shift:
+        print(f"\n  Run with --apply to update model_config.py")
 
 
 if __name__ == "__main__":

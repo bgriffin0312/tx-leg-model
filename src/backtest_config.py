@@ -70,37 +70,48 @@ BACKTEST_CONFIGS: dict[int, dict] = {
         "map_year": 2022,           # district boundary year (post-redistricting)
         "results_year": 2022,       # actual outcomes to validate against
 
-        # Race-specific generic ballot D 2p share (ESTIMATED — update from Civiqs)
+        # Race-specific 2022 vote share (Catalist validated voter estimates)
+        # Source: catalist.us/whathappened2022/
+        # Using actual 2022 results rather than April polling, which had
+        # badly off Hispanic (Marist: R+13 vs actual D+24) and Black numbers.
         "race_generic_ballot_d_share": {
-            "white_nh": 0.41,       # ~R+18 nationally, R+3 generic environment
-            "black_nh": 0.87,
-            "hispanic": 0.60,       # D+20 in TX was rough 2022 estimate
-            "other":    0.58,
+            "white_nh": 0.42,       # Catalist: 42% D (Pew: 41.8%)
+            "black_nh": 0.88,       # Catalist: 88% D (Pew: 94.9%, Edison: 86.9%)
+            "hispanic": 0.62,       # Catalist: 62% D (Pew: 60.6%)
+            "other":    0.59,       # Catalist AAPI: 59% D (Pew: 68%)
         },
 
         # National demographic weights for computing national average
         "national_demo_weights": NATIONAL_DEMO_WEIGHTS_2022,
 
-        # National environment relative to "neutral" (0 = use race polling as-is)
-        # Since we're using race-specific polling directly, set to 0
-        "env_dial": 0,
+        # National environment: actual 2022 result was R+2.7 (D 2p = 48.6%)
+        # env_dial is the absolute D-R margin in pp, consistent with regression training
+        "env_dial": -2.8,
 
-        # Regression coefficients (from Phase 1 full model with presidential baseline)
-        # These are the same as in model_config.py — the regression is cross-cycle
+        # Regression coefficients (from Phase 1 with presidential baseline)
+        # Using with_pres national_env coefficient (0.0052) since finance data
+        # is available and the full-model coefficient (0.0027) is suppressed by
+        # collinearity with finance variables
         "regression_coefficients": {
             "intercept":                 0.1520,
             "dem_pres_2p_baseline":      0.6604,
             "dem_incumbent":             0.0600,
             "rep_incumbent":            -0.0739,
             "chamber_senate":           -0.0261,
-            "national_env":              0.0027,
+            "national_env":              0.0052,
             "challenger_viability_flag": 0.0393,
+            "dem_fundraising_share":     0.0624,
             "sigma":                     0.0785,
         },
 
-        # Finance: no early-cycle finance data available for historical backtest
-        # Set all challenger_viability_flag = 0 (conservative; understates Dem challengers)
-        "use_finance": False,
+        # Finance: 2022 full-cycle finance data available
+        "use_finance": True,
+        "finance_file": "tx_finance_2022.csv",
+
+        # WAR: use 2018-only WAR (pre-2022, avoids data leakage)
+        "use_war": True,
+        "war_max_year": 2018,
+        "war_persistence_coef": 0.46,
 
         # Senate districts up in 2022
         # All 31 senate seats were on the 2022 ballot due to redistricting
@@ -109,11 +120,11 @@ BACKTEST_CONFIGS: dict[int, dict] = {
         "notes": (
             "2022 was the first election using the post-2021 redistricted maps. "
             "All 31 Senate seats were on the ballot (unusual; normally only ~half). "
-            "April 2022 environment: R+3 to R+4 generic ballot, pre-Dobbs decision. "
-            "NOTE: Generic ballot values are ESTIMATED — update from Civiqs historical."
+            "Actual national result: R+2.7 popular vote. "
+            "Racial crosstabs from Catalist validated voter estimates."
         ),
-        "source": "ESTIMATED from 2022 exit polls and historical polling; update with Civiqs",
-        "updated": "2026-04-06",
+        "source": "Catalist whathappened2022, Pew validated voters July 2023, TEC finance 2022",
+        "updated": "2026-04-08",
     },
 
     # -----------------------------------------------------------------------

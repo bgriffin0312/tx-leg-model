@@ -102,6 +102,7 @@ def load_2026_cover(verbose: bool = False) -> dict:
     by_district: dict = defaultdict(dict)
     rows_kept = 0
     rows_skipped_date = 0
+    rows_straddling = 0  # reports where start is outside window but end is inside
 
     for row in reader:
         seek_office = row.get("filerSeekOfficeCd", "").strip().upper()
@@ -117,9 +118,19 @@ def load_2026_cover(verbose: bool = False) -> dict:
         if district < 1 or district > (150 if chamber == "house" else 31):
             continue
 
-        # Date filter: period must start within 2026 cycle
+        # 2026 partial-cycle: use periodStartDt because we want reports whose
+        # coverage period begins within our window. Historical pipeline uses
+        # periodEndDt because full-cycle aggregation needs the end date.
+        # A report starting Dec 2025 and ending Jan 2026 will be missed here
+        # but this is acceptable for early-cycle data; re-run after July filing
+        # will catch full-cycle reports.
         period_start = re.sub(r"\D", "", row.get("periodStartDt", "").strip())[:8]
+        period_end   = re.sub(r"\D", "", row.get("periodEndDt",   "").strip())[:8]
         if len(period_start) < 8 or not (CYCLE_START <= period_start <= CYCLE_END):
+            # Track straddling reports: start outside window but end inside
+            if (len(period_end) >= 8 and CYCLE_START <= period_end <= CYCLE_END
+                    and seek_office in OFFICE_CODES):
+                rows_straddling += 1
             rows_skipped_date += 1
             continue
 
@@ -153,6 +164,10 @@ def load_2026_cover(verbose: bool = False) -> dict:
         rows_kept += 1
 
     print(f"  2026 cover rows kept: {rows_kept:,}  (skipped {rows_skipped_date:,} outside date window)")
+    if rows_straddling:
+        print(f"  NOTE: {rows_straddling} legislative reports straddled the cycle boundary "
+              f"(periodEnd in window but periodStart outside). These are excluded; "
+              f"re-run after July filing to capture full-cycle reports.")
     house_count  = sum(1 for (ch, _) in by_district if ch == "house")
     senate_count = sum(1 for (ch, _) in by_district if ch == "senate")
     print(f"  Districts with any filing: {house_count} house, {senate_count} senate")
@@ -190,16 +205,46 @@ def load_districts_2026() -> dict:
 # Step 3: Assign parties and compute per-district finance summary
 # ---------------------------------------------------------------------------
 
+def _load_candidates_2026() -> dict[tuple, dict]:
+    """
+    Load data/processed/candidates_2026.csv → {(chamber_lower, district): {r: name, d: name}}.
+    Names are normalized for fuzzy matching against TEC filer names.
+    """
+    path = DATA_PROC / "candidates_2026.csv"
+    if not path.exists():
+        return {}
+    import pandas as pd
+    df = pd.read_csv(path)
+    lookup = {}
+    for _, row in df.iterrows():
+        ch = str(row["chamber"]).strip().lower()
+        dist = int(row["district"])
+        r_cand = str(row.get("r_candidate") or "").strip() if pd.notna(row.get("r_candidate")) else ""
+        d_cand = str(row.get("d_candidate") or "").strip() if pd.notna(row.get("d_candidate")) else ""
+        lookup[(ch, dist)] = {"r": r_cand, "d": d_cand}
+    return lookup
+
+
+def _match_filer_to_candidate(filer_name: str, candidate_name: str) -> bool:
+    """Check if a TEC filer name matches a candidate name (fuzzy last-name match)."""
+    if not candidate_name:
+        return False
+    return _name_match(_normalize_name(filer_name), _normalize_name(candidate_name))
+
+
 def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> list[dict]:
     """
     For each district with TEC data:
-      - Identify the incumbent filer (via hold-office flag OR name match to districts_2026)
-      - Aggregate incumbent_raised and challenger_raised
-      - Compute early-cycle viability flag
+      - For districts with known 2026 nominees (from candidates_2026.csv):
+        match filers to R/D nominees by name, compute per-party fundraising
+      - For incumbent-held seats without candidate data:
+        use incumbent vs challenger classification
+      - Compute early-cycle viability flag based on opposition fundraising
 
     Returns list of row dicts ready for CSV output.
     """
     rows = []
+    candidates = _load_candidates_2026()
 
     # Build a combined set: House (all 150) + Senate on 2026 ballot (16)
     all_districts = []
@@ -220,61 +265,133 @@ def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> lis
             rows.append(_placeholder_row(chamber, district, incumbent_name, incumbent_party))
             continue
 
-        # Classify each filer as incumbent or challenger
-        inc_total  = 0.0
-        chal_total = 0.0
-        inc_name_found   = ""
-        chal_names_found = []
+        # Check if we have known 2026 nominees for this district
+        cand = candidates.get((chamber, district))
 
-        for fid, fdata in filers.items():
-            name  = fdata["name"]
-            total = fdata["total"]
-            is_inc_by_hold = fdata["is_incumbent"]
+        r_total = 0.0
+        d_total = 0.0
+        r_name_found = ""
+        d_name_found = ""
+        unmatched_names = []
 
-            # Secondary check: name match against known incumbent
-            is_inc_by_name = (
-                bool(incumbent_name)
-                and _name_match(_normalize_name(name), _normalize_name(incumbent_name))
-            )
+        if cand and (cand["r"] or cand["d"]):
+            # --- Nominee-based matching: match filers to known R/D nominees ---
+            for fid, fdata in filers.items():
+                name = fdata["name"]
+                total = fdata["total"]
 
-            if is_inc_by_hold or is_inc_by_name:
-                inc_total += total
-                if not inc_name_found:
-                    inc_name_found = name
+                if cand["r"] and _match_filer_to_candidate(name, cand["r"]):
+                    r_total += total
+                    if not r_name_found:
+                        r_name_found = name
+                elif cand["d"] and _match_filer_to_candidate(name, cand["d"]):
+                    d_total += total
+                    if not d_name_found:
+                        d_name_found = name
+                else:
+                    unmatched_names.append(name)
+
+            # Viability: does the opposition party nominee have meaningful funding?
+            if incumbent_party == "R" or (open_seat and incumbent_party == "R"):
+                opp_total = d_total  # D is the opposition
+            elif incumbent_party == "D" or (open_seat and incumbent_party == "D"):
+                opp_total = r_total  # R is the opposition
             else:
-                chal_total += total
-                chal_names_found.append(name)
+                opp_total = max(r_total, d_total)
 
-        # If open seat, whoever raised most is treated as "leading" (no incumbent)
-        if open_seat:
-            inc_total  = 0.0
-            chal_total = sum(f["total"] for f in filers.values())
+            threshold = THRESHOLD.get(chamber, 100_000)
+            viability_flag = int(opp_total >= threshold)
 
-        threshold = THRESHOLD.get(chamber, 100_000)
-        viability_flag = int(chal_total >= threshold)
+            # dem_fundraising_share from actual nominee totals
+            # Minimum $10K total raised to compute a meaningful ratio;
+            # below that, one-sided filings produce 0.0 or 1.0 from noise
+            _MIN_TOTAL_FOR_SHARE = 10_000
+            if (r_total + d_total) >= _MIN_TOTAL_FOR_SHARE:
+                dem_fundraising_share = round(d_total / (r_total + d_total), 4)
+            else:
+                # None → filled with 0.5 (neutral) in model.py line 270 via .fillna(0.5)
+                dem_fundraising_share = None
 
-        # dem_fundraising_share: D raised / (D raised + R raised)
-        # Assignment: incumbent party tells us which side is D vs R.
-        # Caveats: challenger_raised may include same-party primary opponents,
-        # so this is an approximation. Open/vacant seats get None.
-        if incumbent_party == "D" and (inc_total + chal_total) > 0:
-            dem_fundraising_share = round(inc_total / (inc_total + chal_total), 4)
-        elif incumbent_party == "R" and (inc_total + chal_total) > 0:
-            dem_fundraising_share = round(chal_total / (inc_total + chal_total), 4)
+            # For the model: incumbent_raised = party-of-seat nominee,
+            # challenger_raised = opposition nominee
+            if incumbent_party == "R":
+                inc_raised = r_total
+                chal_raised = d_total
+            elif incumbent_party == "D":
+                inc_raised = d_total
+                chal_raised = r_total
+            else:
+                inc_raised = 0.0
+                chal_raised = max(r_total, d_total)
+
+            method = "nominee_match"
+            chal_display = "; ".join(
+                [n for n in [r_name_found, d_name_found] if n]
+                + unmatched_names[:3]
+            )
         else:
-            dem_fundraising_share = None  # open seat, vacant, or no data
+            # --- Legacy: incumbent vs challenger classification ---
+            inc_total  = 0.0
+            chal_total = 0.0
+            inc_name_found   = ""
+            chal_names_found = []
+
+            for fid, fdata in filers.items():
+                name  = fdata["name"]
+                total = fdata["total"]
+                is_inc_by_hold = fdata["is_incumbent"]
+
+                is_inc_by_name = (
+                    bool(incumbent_name)
+                    and _name_match(_normalize_name(name), _normalize_name(incumbent_name))
+                )
+
+                if is_inc_by_hold or is_inc_by_name:
+                    inc_total += total
+                    if not inc_name_found:
+                        inc_name_found = name
+                else:
+                    chal_total += total
+                    chal_names_found.append(name)
+
+            if open_seat:
+                # Legacy path can't determine party affiliation of filers
+                # without nominee data. Setting viability=0 and dem_share=None
+                # (neutral) avoids misclassifying all filer money as one party.
+                # These districts need entries in candidates_2026.csv for
+                # proper nominee-matched finance.
+                inc_total  = 0.0
+                chal_total = sum(f["total"] for f in filers.values())
+                viability_flag = 0
+                dem_fundraising_share = None
+            else:
+                threshold = THRESHOLD.get(chamber, 100_000)
+                viability_flag = int(chal_total >= threshold)
+
+                _MIN_TOTAL_FOR_SHARE = 10_000
+                if incumbent_party == "D" and (inc_total + chal_total) >= _MIN_TOTAL_FOR_SHARE:
+                    dem_fundraising_share = round(inc_total / (inc_total + chal_total), 4)
+                elif incumbent_party == "R" and (inc_total + chal_total) >= _MIN_TOTAL_FOR_SHARE:
+                    dem_fundraising_share = round(chal_total / (inc_total + chal_total), 4)
+                else:
+                    dem_fundraising_share = None
+
+            inc_raised = inc_total
+            chal_raised = chal_total
+            method = "hold_office_and_name_match"
+            chal_display = "; ".join(chal_names_found[:5])
 
         rows.append({
             "year":                          2026,
             "chamber":                       chamber.title(),
             "district":                      district,
-            "incumbent_name_tec":            inc_name_found,
+            "incumbent_name_tec":            r_name_found or d_name_found or "",
             "incumbent_party":               incumbent_party,
-            "incumbent_raised":              round(inc_total, 2),
-            "challenger_raised":             round(chal_total, 2),
+            "incumbent_raised":              round(inc_raised, 2),
+            "challenger_raised":             round(chal_raised, 2),
             "dem_fundraising_share":         dem_fundraising_share,
-            "challenger_names":              "; ".join(chal_names_found[:5]),
-            "party_assignment_method":       "hold_office_and_name_match",
+            "challenger_names":              chal_display,
+            "party_assignment_method":       method,
             "challenger_viability_flag_early": viability_flag,
             "viability_threshold_used":      threshold,
             "open_seat":                     open_seat,
@@ -368,10 +485,11 @@ def merge_into_districts(finance_rows: list[dict]):
             row["dem_fundraising_share"] = fin.get("dem_fundraising_share", "")
             updated += 1
         else:
-            row.setdefault("challenger_viability_flag_early", 0)
-            row.setdefault("incumbent_raised", "")
-            row.setdefault("challenger_raised", "")
-            row.setdefault("dem_fundraising_share", "")
+            # Explicitly clear — don't preserve stale data from prior runs
+            row["challenger_viability_flag_early"] = 0
+            row["incumbent_raised"] = ""
+            row["challenger_raised"] = ""
+            row["dem_fundraising_share"] = ""
 
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=out_fields, extrasaction="ignore")

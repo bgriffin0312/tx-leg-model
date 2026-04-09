@@ -47,8 +47,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from backtest_config import BACKTEST_CONFIGS
 
 # Monte Carlo parameters (same as model.py)
+SIGMA_TOTAL    = 0.0785
 SIGMA_NATIONAL = 0.060
-SIGMA_IDIO     = 0.053
+SIGMA_IDIO     = (SIGMA_TOTAL**2 - SIGMA_NATIONAL**2)**0.5  # = 0.05062
 N_SIMULATIONS  = 10_000
 
 RNG = np.random.default_rng(42)
@@ -137,6 +138,17 @@ def build_backtest_df(config: dict, chamber: str,
     pres_year   = config["pres_year"]
     map_year    = config["map_year"]
 
+    # Load finance data if configured
+    finance_df = None
+    if config.get("use_finance") and config.get("finance_file"):
+        fin_path = DATA_HIST / config["finance_file"]
+        if fin_path.exists():
+            finance_df = pd.read_csv(fin_path)
+            finance_df["district"] = finance_df["district"].astype(int)
+            print(f"  Loaded finance data: {fin_path.name} ({len(finance_df)} rows)")
+        else:
+            print(f"  WARNING: Finance file {fin_path.name} not found")
+
     # Load actual results
     results = load_historical_results(year, chamber)
     if results is None:
@@ -189,6 +201,35 @@ def build_backtest_df(config: dict, chamber: str,
         rep_incumbent = int(r_inc)
         open_seat = int(not r_inc and not d_inc)
 
+        # Finance: challenger viability flag
+        chal_viab = 0
+        dem_fundraising_share = 0.5
+        total_raised = 0.0
+        if config.get("use_finance") and finance_df is not None:
+            fin_match = finance_df[
+                (finance_df["chamber"].str.lower() == chamber) &
+                (finance_df["district"] == district)
+            ]
+            if not fin_match.empty:
+                fr = fin_match.iloc[0]
+                cv = fr.get("challenger_viability_flag", 0)
+                chal_viab = int(cv) if pd.notna(cv) else 0
+                dfs = fr.get("dem_fundraising_share")
+                if pd.notna(dfs):
+                    dem_fundraising_share = float(dfs)
+                # Total raised for $10K minimum threshold
+                dem_r = fr.get("dem_raised", 0)
+                rep_r = fr.get("rep_raised", 0)
+                total_raised = (float(dem_r) if pd.notna(dem_r) else 0) + \
+                               (float(rep_r) if pd.notna(rep_r) else 0)
+
+        # WAR: use pre-cycle WAR only (avoid data leakage)
+        inc_name = ""
+        if d_inc:
+            inc_name = str(res_row.get("d_candidate", "")).strip()
+        elif r_inc:
+            inc_name = str(res_row.get("r_candidate", "")).strip()
+
         rows.append({
             "district": district,
             "chamber": chamber.title(),
@@ -201,8 +242,11 @@ def build_backtest_df(config: dict, chamber: str,
             "dem_incumbent": dem_incumbent,
             "rep_incumbent": rep_incumbent,
             "open_seat": open_seat,
+            "incumbent": inc_name,
             "incumbent_party": ("D" if d_inc else "R" if r_inc else ""),
-            "challenger_viability_flag": 0,
+            "challenger_viability_flag": chal_viab,
+            "dem_fundraising_share": dem_fundraising_share,
+            "total_raised": total_raised,
             "actual_dem_2p_share": res_row.get("dem_2p_share"),
             "actual_winner_party": res_row.get("winner_party", ""),
             "contested": bool(res_row.get("contested", False)),
@@ -268,6 +312,21 @@ def build_linear_predictions(df: pd.DataFrame, config: dict) -> pd.Series:
     pres_baseline = pd.to_numeric(df["dem_pres_2p_baseline"], errors="coerce")
     chamber_senate = (df["chamber_lower"] == "senate").astype(int)
 
+    # Finance term
+    chal_flag = pd.to_numeric(df.get("challenger_viability_flag", 0), errors="coerce").fillna(0)
+    dem_fs = pd.to_numeric(df.get("dem_fundraising_share", 0.5), errors="coerce")
+    # Nullify dem_fundraising_share below $10K total raised (noise, not signal)
+    total_raised = pd.to_numeric(df.get("total_raised", 0), errors="coerce").fillna(0)
+    low_total = total_raised < 10_000
+    n_nullified = (low_total & dem_fs.notna()).sum()
+    dem_fs[low_total] = np.nan
+    dem_fs = dem_fs.fillna(0.5)
+
+    finance_term = (
+        coefs["challenger_viability_flag"] * chal_flag
+        + coefs.get("dem_fundraising_share", 0) * dem_fs
+    )
+
     predicted = (
         coefs["intercept"]
         + coefs["dem_pres_2p_baseline"] * pres_baseline.fillna(national_avg)
@@ -276,8 +335,91 @@ def build_linear_predictions(df: pd.DataFrame, config: dict) -> pd.Series:
         + coefs["dem_incumbent"] * df["dem_incumbent"]
         + coefs["rep_incumbent"] * df["rep_incumbent"]
         + coefs["chamber_senate"] * chamber_senate
-        + coefs["challenger_viability_flag"] * df["challenger_viability_flag"]
     )
+
+    # WAR persistence (mirrors model.py dual-track logic)
+    war_persistence = config.get("war_persistence_coef", 0.46)
+    war_max_year = config.get("war_max_year")
+    has_war = pd.Series(False, index=df.index)
+    war_adj = pd.Series(0.0, index=df.index)
+
+    if config.get("use_war") and war_max_year:
+        import re as _re
+        race_war_path = DATA_PROC / "race_war.csv"
+        if race_war_path.exists():
+            rw = pd.read_csv(race_war_path)
+            rw = rw[rw["year"] <= war_max_year]
+            # Compute per-candidate avg WAR from pre-cycle data
+            avg_war = (
+                rw.groupby(["candidate_norm", "party"])["war_race"]
+                .mean()
+                .to_dict()
+            )
+            def _norm(name):
+                if not name or (isinstance(name, float) and np.isnan(name)):
+                    return ""
+                s = str(name).lower().strip()
+                s = _re.sub(r"\b(jr|sr|ii|iii|iv)\b\.?", "", s)
+                s = _re.sub(r"[^\w\s]", "", s)
+                s = _re.sub(r"\s+", " ", s).strip()
+                return s
+
+            # Build fuzzy lookup index for subset/initial matching
+            names_by_party: dict[str, list] = {"D": [], "R": []}
+            for (norm_name, party), w in avg_war.items():
+                names_by_party.setdefault(party, []).append(
+                    (norm_name, set(norm_name.split()), w)
+                )
+
+            def _fuzzy_match(query_norm: str, party: str) -> float | None:
+                query_tokens = set(query_norm.split())
+                if not query_tokens:
+                    return None
+                query_first_char = query_norm.split()[0][0] if query_norm.split() else ""
+                query_last = query_norm.split()[-1] if query_norm.split() else ""
+                for cand_norm, cand_tokens, w in names_by_party.get(party, []):
+                    # Subset: all tokens of shorter name in longer
+                    shorter, longer = (query_tokens, cand_tokens) if len(query_tokens) <= len(cand_tokens) else (cand_tokens, query_tokens)
+                    if shorter <= longer and len(shorter) >= 2:
+                        return w
+                    # Last name + first initial
+                    cand_first_char = cand_norm.split()[0][0] if cand_norm.split() else ""
+                    cand_last = cand_norm.split()[-1] if cand_norm.split() else ""
+                    if (query_last == cand_last and query_last
+                            and query_first_char == cand_first_char and query_first_char):
+                        return w
+                return None
+
+            n_exact = 0
+            n_fuzzy = 0
+            for idx, row in df.iterrows():
+                inc_name = str(row.get("incumbent", "")).strip()
+                inc_party = str(row.get("incumbent_party", "")).strip().upper()
+                is_open = bool(row.get("open_seat", 0))
+                if not inc_name or inc_party not in ("D", "R") or is_open:
+                    continue
+                inc_norm = _norm(inc_name)
+                w = avg_war.get((inc_norm, inc_party))
+                match_type = "exact" if w is not None else None
+                if w is None:
+                    w = _fuzzy_match(inc_norm, inc_party)
+                    if w is not None:
+                        match_type = "fuzzy"
+                if w is not None:
+                    party_sign = 1 if inc_party == "D" else -1
+                    war_adj[idx] = party_sign * war_persistence * w / 100.0
+                    has_war[idx] = True
+                    if match_type == "exact":
+                        n_exact += 1
+                    else:
+                        n_fuzzy += 1
+
+            print(f"  WAR: {n_exact + n_fuzzy} incumbents matched "
+                  f"({n_exact} exact, {n_fuzzy} fuzzy, using races through {war_max_year})")
+
+    # Dual-track: WAR districts use WAR, others use finance
+    predicted += np.where(has_war, war_adj, finance_term)
+
     return predicted
 
 

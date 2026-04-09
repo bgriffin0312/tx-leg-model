@@ -82,9 +82,11 @@ OFFICE_CODES = {"STATEREP": "house", "STATESEN": "senate"}
 # Senate districts on the 2026 ballot
 SENATE_2026_BALLOT = {1, 2, 3, 4, 5, 9, 11, 13, 18, 19, 21, 22, 24, 26, 28, 31}
 
-# Date window: 2026 cycle
-CYCLE_START = "20260101"
-CYCLE_END   = "20261231"  # full cycle (IEs happen through general election)
+# Date window: 2026 general election cycle (post-primary only)
+# Primary was March 3, 2026. Pre-primary IEs are largely intra-party
+# (R PACs backing preferred R candidates) and don't reflect general election dynamics.
+CYCLE_START = "20260304"  # day after primary
+CYCLE_END   = "20261231"
 
 OUTPUT_FIELDS = [
     "chamber", "district", "direction", "filer_name", "filer_id",
@@ -134,8 +136,10 @@ def load_spacs(cd: dict, verbose: bool = False) -> dict[str, dict]:
     else:
         reader_data = reader
 
-    spacs: dict[str, dict] = {}
+    # Key: (filer_id, candidate_filer_id) to handle SPACs targeting multiple candidates
+    spacs: dict[tuple[str, str], dict] = {}
     skipped = 0
+    filer_target_count: dict[str, int] = {}  # track multi-target SPACs
 
     for row in reader_data:
         # Key fields (TEC column names confirmed from ZIP inspection)
@@ -164,6 +168,7 @@ def load_spacs(cd: dict, verbose: bool = False) -> dict[str, dict]:
                 continue
 
         filer_id          = row.get("filerIdent", "").strip()
+        filer_name        = row.get("filerName", "").strip()
         cand_filer_id     = row.get("candidateFilerIdent", "").strip()
         cand_name         = row.get("candidateName", "").strip()
 
@@ -171,15 +176,25 @@ def load_spacs(cd: dict, verbose: bool = False) -> dict[str, dict]:
             skipped += 1
             continue
 
-        spacs[filer_id] = {
+        spac_key = (filer_id, cand_filer_id)
+        spacs[spac_key] = {
+            "filer_id":            filer_id,
+            "filer_name":          filer_name,
             "position":           position,
             "candidate_filer_id": cand_filer_id,
             "candidate_name":     cand_name,
             "chamber":            chamber,
             "district":           district,
         }
+        filer_target_count[filer_id] = filer_target_count.get(filer_id, 0) + 1
 
-    print(f"  Parsed {len(spacs)} SPAC → candidate mappings for TX legislative races")
+    # Report multi-target SPACs
+    multi_target = {fid: n for fid, n in filer_target_count.items() if n > 1}
+    n_unique_filers = len(filer_target_count)
+    print(f"  Parsed {len(spacs)} SPAC → candidate mappings from {n_unique_filers} unique filers")
+    if multi_target:
+        print(f"  {len(multi_target)} SPAC filers target multiple candidates "
+              f"(would have lost {sum(n - 1 for n in multi_target.values())} mappings with old code)")
     if skipped:
         print(f"  Skipped {skipped} rows (other offices or missing data)")
 
@@ -344,9 +359,9 @@ def classify_with_claude(purpose_texts: list[str], districts_hint: list[dict]) -
 # ---------------------------------------------------------------------------
 
 def assemble_ie_rows(
-    spacs: dict[str, dict],
+    spacs: dict[tuple[str, str], dict],
     expenditures: list[dict],
-    candidate_party: dict[str, str],  # spac_filer_id -> "D"|"R"|"unknown"
+    candidate_party: dict[tuple[str, str], str],  # (filer_id, cand_filer_id) -> "D"|"R"|"unknown"
 ) -> list[dict]:
     """
     Join SPAC position data with expenditure amounts to produce final IE rows.
@@ -356,37 +371,50 @@ def assemble_ie_rows(
       SPAC SUPPORT R candidate → R_favor (IE helps R)
       SPAC OPPOSE  D candidate → R_favor (hurts D = helps R)
       SPAC OPPOSE  R candidate → D_favor (hurts R = helps D)
+
+    Each expenditure is matched to ALL candidate targets for that SPAC filer,
+    with the amount split equally across targets.
     """
     rows = []
 
+    # Build filer_id → list of (spac_key, spac_info) for matching expenditures
+    filer_to_targets: dict[str, list[tuple]] = {}
+    for spac_key, info in spacs.items():
+        fid = spac_key[0]
+        filer_to_targets.setdefault(fid, []).append((spac_key, info))
+
     for exp in expenditures:
         filer_id = exp["filer_id"]
-        spac_info = spacs.get(filer_id)
-        if not spac_info:
+        targets = filer_to_targets.get(filer_id)
+        if not targets:
             continue
 
-        chamber   = spac_info["chamber"]
-        district  = spac_info["district"]
-        position  = spac_info["position"]  # SUPPORT or OPPOSE
-        cand_name = spac_info["candidate_name"]
+        # Split expenditure equally across all candidate targets for this filer
+        split_amount = exp["amount"] / len(targets)
 
-        cand_party = candidate_party.get(filer_id, "unknown")
-        direction  = _resolve_direction(position, cand_party, cand_name)
+        for spac_key, spac_info in targets:
+            chamber   = spac_info["chamber"]
+            district  = spac_info["district"]
+            position  = spac_info["position"]
+            cand_name = spac_info["candidate_name"]
 
-        rows.append({
-            "chamber":               chamber.title(),
-            "district":              district,
-            "direction":             direction,
-            "filer_name":            exp["filer_name"],
-            "filer_id":              filer_id,
-            "candidate_name":        cand_name,
-            "candidate_filer_id":    spac_info["candidate_filer_id"],
-            "amount":                round(exp["amount"], 2),
-            "expenditure_date":      exp["expenditure_date"],
-            "purpose_description":   exp["purpose_description"],
-            "classification_method": "spac_position_code",
-            "source_file":           exp["source_file"],
-        })
+            cand_party = candidate_party.get(spac_key, "unknown")
+            direction  = _resolve_direction(position, cand_party, cand_name)
+
+            rows.append({
+                "chamber":               chamber.title(),
+                "district":              district,
+                "direction":             direction,
+                "filer_name":            exp["filer_name"],
+                "filer_id":              filer_id,
+                "candidate_name":        cand_name,
+                "candidate_filer_id":    spac_info["candidate_filer_id"],
+                "amount":                round(split_amount, 2),
+                "expenditure_date":      exp["expenditure_date"],
+                "purpose_description":   exp["purpose_description"],
+                "classification_method": "spac_position_code",
+                "source_file":           exp["source_file"],
+            })
 
     return rows
 
@@ -409,6 +437,144 @@ def _resolve_direction(position: str, cand_party: str | None, cand_name: str) ->
         # Opposing D → helps R; opposing R → helps D
         return "R_favor" if cand_party == "D" else "D_favor"
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Step 4b: Load DCE (Direct Campaign Expenditure) data from cand.csv
+# ---------------------------------------------------------------------------
+
+def _load_dce_filer_parties() -> dict[str, str]:
+    """Load filer → party lookup from data/raw/dce_filer_parties.csv."""
+    path = DATA_RAW / "dce_filer_parties.csv"
+    if not path.exists():
+        print(f"  WARNING: {path.name} not found — DCE filers won't be classified")
+        return {}
+    import pandas as pd
+    df = pd.read_csv(path)
+    lookup = {}
+    for _, row in df.iterrows():
+        name = str(row.get("filer_name", "")).strip()
+        party = str(row.get("favors_party", "")).strip().upper()
+        if name and party in ("R", "D"):
+            lookup[name.upper()] = party
+    print(f"  Loaded {len(lookup)} filer→party mappings from {path.name}")
+    return lookup
+
+
+def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
+    """
+    Extract cand.csv from TEC ZIP — Direct Campaign Expenditure records
+    where PACs/individuals report spending to support/oppose specific candidates.
+
+    Unlike spacs.csv (which only covers Super PACs), cand.csv captures spending
+    by GPACs like TLR, Texas REALTORS, etc.
+
+    Returns IE rows in the same format as SPAC-based rows.
+    """
+    if "cand.csv" not in cd:
+        print("  cand.csv not found in TEC ZIP")
+        return []
+
+    print("\nExtracting cand.csv (DCE expenditures)...")
+    data = _tec_extract_file(TEC_ZIP_URL, cd["cand.csv"], "cand.csv")
+    if not data:
+        print("  Failed to extract cand.csv")
+        return []
+
+    text = data.decode(TEC_ENCODING, errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+
+    # Load filer party lookup
+    filer_parties = _load_dce_filer_parties()
+
+    rows = []
+    skipped = 0
+    unclassified_filers = defaultdict(float)
+
+    for row in reader:
+        office = row.get("candidateSeekOfficeCd", "").strip().upper()
+        chamber = OFFICE_CODES.get(office)
+        if chamber is None:
+            skipped += 1
+            continue
+
+        dt = row.get("expendDt", "").strip().replace("/", "")[:8]
+        if not dt or len(dt) < 8 or not (CYCLE_START <= dt <= CYCLE_END):
+            skipped += 1
+            continue
+
+        dist_raw = re.sub(r"\D", "", row.get("candidateSeekOfficeDistrict", "").strip())
+        if not dist_raw:
+            skipped += 1
+            continue
+        district = int(dist_raw)
+
+        if chamber == "senate" and district not in SENATE_2026_BALLOT:
+            skipped += 1
+            continue
+
+        try:
+            amount = float(row.get("expendAmount", "0").strip().replace(",", "").replace("$", ""))
+        except ValueError:
+            skipped += 1
+            continue
+        if amount <= 0:
+            skipped += 1
+            continue
+
+        filer_name = row.get("filerName", "").strip()
+        filer_id = row.get("filerIdent", "").strip()
+        cand_first = row.get("candidateNameFirst", "").strip()
+        cand_last = row.get("candidateNameLast", "").strip()
+        candidate_name = f"{cand_first} {cand_last}".strip()
+
+        # Classify direction using filer party lookup
+        filer_party = filer_parties.get(filer_name.upper())
+        if filer_party == "R":
+            direction = "R_favor"
+        elif filer_party == "D":
+            direction = "D_favor"
+        else:
+            direction = "unknown"
+            unclassified_filers[filer_name] += amount
+
+        rows.append({
+            "chamber":               chamber.title(),
+            "district":              district,
+            "direction":             direction,
+            "filer_name":            filer_name,
+            "filer_id":              filer_id,
+            "candidate_name":        candidate_name,
+            "candidate_filer_id":    "",
+            "amount":                round(amount, 2),
+            "expenditure_date":      dt,
+            "purpose_description":   row.get("expendDescr", "").strip()[:200],
+            "classification_method": "dce_filer_lookup",
+            "source_file":           "cand.csv",
+        })
+
+    print(f"  Parsed {len(rows)} DCE records for TX legislative races (2026 cycle)")
+    if skipped:
+        print(f"  Skipped {skipped} rows (other offices, dates, or missing data)")
+
+    # Report unclassified filers
+    if unclassified_filers:
+        total_unclass = sum(unclassified_filers.values())
+        total_all = sum(r["amount"] for r in rows)
+        pct = (total_unclass / total_all * 100) if total_all else 0
+        print(f"  Unclassified filer spending: ${total_unclass:,.0f} ({pct:.1f}% of DCE total)")
+        if verbose:
+            for fn, amt in sorted(unclassified_filers.items(), key=lambda x: -x[1])[:10]:
+                print(f"    ${amt:>12,.0f}  {fn}")
+
+    classified = sum(r["amount"] for r in rows if r["direction"] != "unknown")
+    print(f"  Classified DCE spending: ${classified:,.0f}")
+    d_total = sum(r["amount"] for r in rows if r["direction"] == "D_favor")
+    r_total = sum(r["amount"] for r in rows if r["direction"] == "R_favor")
+    print(f"    D-favoring: ${d_total:,.0f}")
+    print(f"    R-favoring: ${r_total:,.0f}")
+
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -476,9 +642,10 @@ def merge_ies_into_districts(aggregated: list[dict]):
             row["ie_r_favor"] = ie["ie_r_favor"]
             row["ie_net_d"]   = ie["ie_net_d"]
         else:
-            row.setdefault("ie_d_favor", 0)
-            row.setdefault("ie_r_favor", 0)
-            row.setdefault("ie_net_d",  0)
+            # Explicitly zero out — don't preserve stale data from prior runs
+            row["ie_d_favor"] = 0
+            row["ie_r_favor"] = 0
+            row["ie_net_d"]   = 0
 
     with open(DISTRICTS_PATH, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=out_fields, extrasaction="ignore")
@@ -564,17 +731,17 @@ def _names_match(a: str, b: str) -> bool:
     return longest_a == longest_b or len(a_tok & b_tok) >= 2
 
 
-def load_candidate_party(spacs: dict[str, dict]) -> dict[str, str]:
+def load_candidate_party(spacs: dict[tuple[str, str], dict]) -> dict[tuple[str, str], str]:
     """
-    Build a filer-ID → party map for SPAC target candidates.
+    Build a (filer_id, cand_filer_id) → party map for SPAC target candidates.
 
     Strategy (in priority order):
       1. Primary results (tx_primary_2026.csv) — name-match against spacs candidate names
       2. districts_2026.csv incumbent party — for incumbents running in the general
       3. Fallback: "unknown"
 
-    Returns {spac_filer_id: "D"|"R"|"unknown"} indicating whether the *target* candidate
-    is the Democratic or Republican candidate in that district.
+    Returns {(spac_filer_id, cand_filer_id): "D"|"R"|"unknown"} indicating whether
+    the *target* candidate is the Democratic or Republican candidate in that district.
     """
     # Build: (chamber, district) → {D: winner_name, R: winner_name}
     primary_winners: dict[tuple, dict] = {}
@@ -601,35 +768,64 @@ def load_candidate_party(spacs: dict[str, dict]) -> dict[str, str]:
                     key = (row["chamber"].strip().lower(), int(row["district"]))
                     incumbent_party[key] = party
 
+    # Load SPAC/PAC filer party alignment (same lookup used by DCE classifier)
+    spac_filer_parties = _load_dce_filer_parties()
+
     # Resolve each SPAC → target party
-    result: dict[str, str] = {}
-    for spac_id, info in spacs.items():
+    result: dict[tuple[str, str], str] = {}
+    n_from_primary = 0
+    n_from_spac_alignment = 0
+    n_unknown = 0
+
+    for spac_key, info in spacs.items():
         key     = (info["chamber"], info["district"])
         cand_nm = info.get("candidate_name", "")
+        filer_id = info.get("filer_id", spac_key[0])
+        position = info.get("position", "")
 
-        # Try primary results first: does the candidate name match D or R winner?
+        # Strategy 1: name-match against primary winners
         pri = primary_winners.get(key, {})
         if pri and cand_nm:
             if pri.get("D") and _names_match(cand_nm, pri["D"]):
-                result[spac_id] = "D"
+                result[spac_key] = "D"
+                n_from_primary += 1
                 continue
             if pri.get("R") and _names_match(cand_nm, pri["R"]):
-                result[spac_id] = "R"
+                result[spac_key] = "R"
+                n_from_primary += 1
                 continue
 
-        # Fallback: if only one primary winner is known, use incumbent party
-        inc_p = incumbent_party.get(key)
-        if inc_p:
-            # The SPAC's target may be incumbent or challenger
-            # Without name-match, assume target is the general election candidate
-            # whose party we can infer from incumbent + primary
-            result[spac_id] = inc_p  # imperfect but best fallback
-        else:
-            result[spac_id] = "unknown"
+        # Strategy 2: infer target party from SPAC's own party alignment + position
+        # A D-aligned PAC filing SUPPORT → target is likely D
+        # A D-aligned PAC filing OPPOSE  → target is likely R
+        # A R-aligned PAC filing SUPPORT → target is likely R
+        # A R-aligned PAC filing OPPOSE  → target is likely D
+        spac_filer_name = info.get("filer_name", "")
+        spac_party = spac_filer_parties.get(spac_filer_name.upper()) if spac_filer_name else None
 
-    resolved = sum(1 for v in result.values() if v in ("D", "R"))
-    print(f"  SPAC target party resolved: {resolved}/{len(result)} "
-          f"({'from primary' if primary_winners else 'from incumbent data'})")
+        if spac_party and position in ("SUPPORT", "OPPOSE"):
+            if position == "SUPPORT":
+                inferred = spac_party  # supporting their own side
+            else:
+                inferred = "D" if spac_party == "R" else "R"  # opposing the other side
+            result[spac_key] = inferred
+            n_from_spac_alignment += 1
+            continue
+
+        # Strategy 3: unknown — don't guess from incumbent party, as the SPAC
+        # may be targeting the challenger (e.g. D-PAC supporting D challenger
+        # in R-held seat). Guessing incumbent party would reverse the direction.
+        result[spac_key] = "unknown"
+        n_unknown += 1
+
+    resolved = n_from_primary + n_from_spac_alignment
+    print(f"  SPAC target party resolved: {resolved}/{len(result)}")
+    if n_from_primary:
+        print(f"    From primary name-match: {n_from_primary}")
+    if n_from_spac_alignment:
+        print(f"    From SPAC filer alignment: {n_from_spac_alignment}")
+    if n_unknown:
+        print(f"    Unknown (no match): {n_unknown}")
     return result
 
 
@@ -664,30 +860,26 @@ def main():
     # Step 1: Parse spacs.csv for SUPPORT/OPPOSE mappings
     spacs = load_spacs(cd, verbose=args.verbose)
     if not spacs:
-        print("\nNo SPAC data found. Ensure spacs.csv is present in TEC ZIP.")
-        if args.spac_only:
-            return
+        print("\nNo SPAC data found for TX legislative races.")
 
     # Step 2: Extract expenditure amounts for SPAC filers
-    spac_filer_ids = set(spacs.keys())
+    spac_filer_ids = set(fid for fid, _ in spacs.keys())
     expenditures = []
     if spac_filer_ids:
         expenditures = load_expenditures_for_spacs(cd, spac_filer_ids, verbose=args.verbose)
 
-    # Step 3: Claude classification for non-SPAC expenditures (future enhancement)
-    # Currently, SPAC filings cover the main IEs. Non-SPAC PAC spending on legislative
-    # races would require purpose.csv extraction + Claude. Skip for now with --spac-only.
-    if not args.spac_only:
-        print("\nNon-SPAC PAC classification via Claude: not yet implemented.")
-        print("  Run with --spac-only to process SPAC data only.")
-        print("  See purpose.csv for free-text descriptions (42MB uncompressed).")
+    # Step 3: Load DCE (Direct Campaign Expenditure) data from cand.csv
+    # This captures GPAC spending (TLR, Texas REALTORS, etc.) that doesn't
+    # appear in spacs.csv. Direction is classified via filer party lookup.
+    dce_rows = load_dce_expenditures(cd, verbose=args.verbose)
 
-    # Step 4: Load candidate party for direction resolution
+    # Step 4: Load candidate party for direction resolution (SPAC rows)
     candidate_party = load_candidate_party(spacs)
 
-    # Step 5: Assemble IE rows
+    # Step 5: Assemble IE rows from SPACs + DCE
     ie_rows = assemble_ie_rows(spacs, expenditures, candidate_party)
-    print(f"\nAssembled {len(ie_rows)} IE rows with direction classification")
+    ie_rows.extend(dce_rows)
+    print(f"\nAssembled {len(ie_rows)} total IE rows (SPAC + DCE)")
 
     # Step 6: Aggregate by district
     aggregated = aggregate_by_district(ie_rows)

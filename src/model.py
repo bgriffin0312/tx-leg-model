@@ -37,6 +37,7 @@ Usage:
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -69,6 +70,7 @@ from model_config import (
     IE_MIN_THRESHOLD,
     IE_WEIGHT,
     IE_DATA_THROUGH,
+    WAR_PERSISTENCE_COEF,
 )
 
 _HAS_FUNDRAISING_SHARE = "dem_fundraising_share" in COEFS
@@ -82,11 +84,120 @@ _ie_weight_override: float | None = None
 
 # Monte Carlo noise decomposition
 # Total σ = 0.0785; split into national (correlated) and idiosyncratic (independent)
-SIGMA_NATIONAL = 0.060   # shared across all districts in a given simulation
-SIGMA_IDIO     = 0.053   # independent per district
-# Check: sqrt(0.060² + 0.053²) ≈ 0.0799 ≈ 0.0785 (close enough)
+SIGMA_TOTAL = 0.0785
+
+SIGMA_SPLITS = {
+    "high-corr": {  # current default: ~58% shared variance
+        "national": 0.060,
+        "idio":     (SIGMA_TOTAL**2 - 0.060**2)**0.5,  # = 0.05062
+        "desc":     "high correlation (58% shared variance)",
+    },
+    "low-corr": {   # proposed: ~33% shared variance
+        "national": 0.045,
+        "idio":     (SIGMA_TOTAL**2 - 0.045**2)**0.5,  # = 0.06437
+        "desc":     "low correlation (33% shared variance)",
+    },
+}
+# Both satisfy: sqrt(national² + idio²) = SIGMA_TOTAL = 0.0785 exactly
+
+_sigma_split = "high-corr"  # active split; changed via --sigma-split
+SIGMA_NATIONAL = SIGMA_SPLITS[_sigma_split]["national"]
+SIGMA_IDIO     = SIGMA_SPLITS[_sigma_split]["idio"]
 
 RNG = np.random.default_rng(42)
+
+# ---------------------------------------------------------------------------
+# WAR lookup helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_name(name: str) -> str:
+    """Normalize a candidate name for matching against the WAR table."""
+    if not name or (isinstance(name, float) and np.isnan(name)):
+        return ""
+    s = str(name).lower().strip()
+    s = re.sub(r"\b(jr|sr|ii|iii|iv)\b\.?", "", s)
+    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+_war_cache: dict | None = None   # lazy-loaded; None means not yet attempted
+_war_names_by_party: dict | None = None  # {party: [(norm_name, tokens, avg_war), ...]}
+
+
+def _fuzzy_war_match(query_norm: str, party: str) -> float | None:
+    """
+    Try fuzzy matching against WAR candidates when exact match fails.
+    Strategy 1: subset match — all tokens in shorter name appear in longer name
+                (handles middle names: "john bryant" ⊂ "john wiley bryant")
+    Strategy 2: last-name + first-initial — "jm lozano" matches "jose manuel lozano"
+                if last tokens match and first chars of first tokens match
+    Returns avg_war or None.
+    """
+    if not _war_names_by_party or party not in _war_names_by_party:
+        return None
+
+    query_tokens = set(query_norm.split())
+    if not query_tokens:
+        return None
+    query_first_char = query_norm.split()[0][0] if query_norm.split() else ""
+    query_last = query_norm.split()[-1] if query_norm.split() else ""
+
+    for cand_norm, cand_tokens, avg_war in _war_names_by_party[party]:
+        # Strategy 1: subset match (all tokens of shorter name in longer)
+        if query_tokens and cand_tokens:
+            shorter, longer = (query_tokens, cand_tokens) if len(query_tokens) <= len(cand_tokens) else (cand_tokens, query_tokens)
+            if shorter <= longer and len(shorter) >= 2:
+                return avg_war
+
+        # Strategy 2: last name + first initial
+        cand_first_char = cand_norm.split()[0][0] if cand_norm.split() else ""
+        cand_last = cand_norm.split()[-1] if cand_norm.split() else ""
+        if (query_last == cand_last and query_last
+                and query_first_char == cand_first_char and query_first_char):
+            return avg_war
+
+    return None
+
+
+def _get_war_lookup() -> dict[tuple[str, str], float]:
+    """
+    Return {(candidate_norm, party): avg_war} from candidate_war.csv.
+    avg_war is the simple per-race average WAR in percentage-point units;
+    we return it as-is and convert at call site (divide by 100).
+    Uses avg_war (not career_war) because the persistence coefficient β=0.46
+    was estimated from per-race WAR regressions, not cumulative career sums.
+    Loaded once; returns {} if the file doesn't exist.
+    Also builds _war_names_by_party for fuzzy matching.
+    """
+    global _war_cache, _war_names_by_party
+    if _war_cache is not None:
+        return _war_cache
+
+    war_path = DATA_PROC / "candidate_war.csv"
+    if not war_path.exists():
+        print("  [WAR] candidate_war.csv not found — WAR term disabled.")
+        _war_cache = {}
+        _war_names_by_party = {}
+        return _war_cache
+
+    df = pd.read_csv(war_path)
+    lookup: dict[tuple[str, str], float] = {}
+    names_by_party: dict[str, list] = {"D": [], "R": []}
+    for _, row in df.iterrows():
+        norm_name = str(row.get("candidate_norm", "")).strip()
+        party = str(row.get("party", "")).strip().upper()
+        avg_war = row.get("avg_war")
+        if norm_name and party in ("D", "R") and pd.notna(avg_war):
+            lookup[(norm_name, party)] = float(avg_war)
+            names_by_party.setdefault(party, []).append(
+                (norm_name, set(norm_name.split()), float(avg_war))
+            )
+
+    print(f"  [WAR] Loaded {len(lookup)} candidates with avg WAR data.")
+    _war_cache = lookup
+    _war_names_by_party = names_by_party
+    return _war_cache
 
 
 # ---------------------------------------------------------------------------
@@ -202,25 +313,100 @@ def build_linear_predictions(df: pd.DataFrame,
 
     # Finance: dem_fundraising_share (0–1; None/missing filled with 0.5 = neutral)
     # 0.5 means equal D/R fundraising — no directional signal.
+    # IMPORTANT: This 0.5 fill is required by collect_finance_2026.py which
+    # outputs None for districts with no D+R totals (open seats without
+    # nominee-matched data, districts with no TEC filings, etc.)
     fundraising_share = pd.to_numeric(
         df.get("dem_fundraising_share", pd.Series(np.nan, index=df.index)),
         errors="coerce"
-    ).fillna(0.5)
+    )
+    # Nullify dem_fundraising_share when total raised is below $10K —
+    # one-sided filings produce 0.0 or 1.0 that are noise, not signal
+    inc_raised = pd.to_numeric(df.get("incumbent_raised", 0), errors="coerce").fillna(0)
+    chal_raised = pd.to_numeric(df.get("challenger_raised", 0), errors="coerce").fillna(0)
+    total_raised = inc_raised + chal_raised
+    low_total_mask = total_raised < 10_000
+    n_nullified = (low_total_mask & fundraising_share.notna()).sum()
+    fundraising_share[low_total_mask] = np.nan
+    fundraising_share = fundraising_share.fillna(0.5)
+    if n_nullified > 0:
+        print(f"  dem_fundraising_share nullified for {n_nullified} districts "
+              f"below $10K total raised threshold")
 
     chamber_senate = (df["chamber_lower"] == "senate").astype(int)
 
+    # Finance term (used for districts without WAR data)
+    finance_term = (
+        COEFS["challenger_viability_flag"] * challenger_flag
+        + (COEFS.get("dem_fundraising_share", 0) * fundraising_share
+           if _HAS_FUNDRAISING_SHARE else 0)
+    )
+
+    # Structural baseline (no finance, no WAR yet)
     predicted = (
         COEFS["intercept"]
         + COEFS["dem_pres_2p_baseline"] * pres_baseline.fillna(national_avg)
         + demo_deviation                                      # race-adjusted lean
+        # env_dial is absolute D-R margin in pp, matching regression
+        # training data (2018=8.6, 2022=-2.8, 2024=-3.2)
         + COEFS["national_env"] * env_dial                   # environment swing
         + COEFS["dem_incumbent"] * dem_inc
         + COEFS["rep_incumbent"] * rep_inc
         + COEFS["chamber_senate"] * chamber_senate
-        + COEFS["challenger_viability_flag"] * challenger_flag
-        + (COEFS.get("dem_fundraising_share", 0) * fundraising_share
-           if _HAS_FUNDRAISING_SHARE else 0)
     )
+
+    # ---------------------------------------------------------------------------
+    # Dual-track: WAR persistence (incumbents with career history) vs. finance
+    # ---------------------------------------------------------------------------
+    # For incumbents found in candidate_war.csv, we:
+    #   • skip challenger_viability_flag and dem_fundraising_share (WAR already
+    #     captures fundraising ability as a quality signal, so including both
+    #     would double-count it)
+    #   • add WAR_PERSISTENCE_COEF × avg_war as a quality adjustment
+    #
+    # avg_war sign convention (from compute_war.py):
+    #   positive WAR → candidate overperforms fundamentals for THEIR party
+    #   For D incumbents: positive WAR → higher dem_2p → add term
+    #   For R incumbents: positive WAR → lower dem_2p → subtract term
+    #
+    # avg_war is per-race average WAR in percentage-point units; divide by 100.
+    # We use avg_war (not career_war) because β=0.46 was estimated from
+    # per-race regressions — applying it to cumulative career sums would
+    # overstate the effect by ~2x for multi-cycle candidates.
+    # ---------------------------------------------------------------------------
+    war_lookup = _get_war_lookup()
+    war_adjustments = pd.Series(0.0, index=df.index)
+    has_war = pd.Series(False, index=df.index)
+
+    n_exact = 0
+    n_fuzzy = 0
+    if war_lookup:
+        for idx, row in df.iterrows():
+            inc_name  = str(row.get("incumbent", "")).strip()
+            inc_party = str(row.get("incumbent_party", "")).strip().upper()
+            is_open = str(row.get("open_seat", "")).strip().lower() in ("true", "1", "yes")
+            if not inc_name or inc_party not in ("D", "R") or is_open:
+                continue
+            inc_norm = _normalize_name(inc_name)
+            # Try exact match first
+            avg_war = war_lookup.get((inc_norm, inc_party))
+            match_type = "exact" if avg_war is not None else None
+            # Try fuzzy match if exact fails
+            if avg_war is None:
+                avg_war = _fuzzy_war_match(inc_norm, inc_party)
+                if avg_war is not None:
+                    match_type = "fuzzy"
+            if avg_war is not None:
+                party_sign = 1 if inc_party == "D" else -1
+                war_adjustments[idx] = party_sign * WAR_PERSISTENCE_COEF * avg_war / 100.0
+                has_war[idx] = True
+                if match_type == "exact":
+                    n_exact += 1
+                else:
+                    n_fuzzy += 1
+
+    # Apply: WAR districts get war_adjustment; others get finance_term
+    predicted += np.where(has_war, war_adjustments, finance_term)
 
     # IE signal: apply ie_dem_share adjustment where total IEs exceed threshold.
     # ie_dem_share = D-favoring IEs / total IEs (0.5 = neutral).
@@ -363,9 +549,15 @@ def print_scenario_summary(env_dial: float, result: dict, df: pd.DataFrame):
         print(f"\n  Competitive districts (D win prob 25%–75%):"
               + ("  ★=IE signal active" if ie_active_mask.any() else ""))
         for idx, row in competitive.head(12).iterrows():
-            inc_str = ("D-inc" if row["incumbent_party"] == "D"
-                       else "R-inc" if row["incumbent_party"] == "R"
-                       else "open")
+            is_open = str(row.get("open_seat", "")).strip().lower() in ("true", "1", "yes")
+            if is_open:
+                inc_str = "open"
+            elif row["incumbent_party"] == "D":
+                inc_str = "D-inc"
+            elif row["incumbent_party"] == "R":
+                inc_str = "R-inc"
+            else:
+                inc_str = "open"
             bar    = "█" * int(row["win_prob_d"] * 20)
             marker = "★" if ie_active_mask.get(idx, False) else " "
             print(f"   {marker}{row['chamber'][0]}D{row['district']:3d}  {row['incumbent']:25s} "
@@ -513,11 +705,21 @@ def main():
                         help="Override IE_WEIGHT from config (0–1). "
                              "0.5=post-runoff, 0.75=post-July-filing, 1.0=pre-election. "
                              "Use 0 to run with IEs disabled.")
+    parser.add_argument("--sigma-split", choices=list(SIGMA_SPLITS.keys()) + ["compare"],
+                        default=None,
+                        help="Correlation structure: 'high-corr' (default, 58%% shared), "
+                             "'low-corr' (33%% shared), or 'compare' (run both and show diff).")
     args = parser.parse_args()
 
     if args.ie_weight is not None:
         global _ie_weight_override
         _ie_weight_override = max(0.0, min(1.0, args.ie_weight))
+
+    if args.sigma_split and args.sigma_split != "compare":
+        global SIGMA_NATIONAL, SIGMA_IDIO, _sigma_split
+        _sigma_split = args.sigma_split
+        SIGMA_NATIONAL = SIGMA_SPLITS[_sigma_split]["national"]
+        SIGMA_IDIO = SIGMA_SPLITS[_sigma_split]["idio"]
 
     envs = args.envs if args.envs else ENV_SCENARIOS
 
@@ -553,6 +755,30 @@ def main():
 
     df = load_districts()
 
+    # Pre-load WAR table so the count prints before scenario runs
+    war_lookup = _get_war_lookup()
+    if war_lookup:
+        # Count how many on-ballot incumbents have WAR data (exact + fuzzy)
+        n_exact_pre = 0
+        n_fuzzy_pre = 0
+        for _, row in df.iterrows():
+            inc_party = str(row.get("incumbent_party", "")).strip().upper()
+            if inc_party not in ("D", "R"):
+                continue
+            is_open = str(row.get("open_seat", "")).strip().lower() in ("true", "1", "yes")
+            if is_open:
+                continue
+            inc_norm = _normalize_name(str(row.get("incumbent", "")).strip())
+            if (inc_norm, inc_party) in war_lookup:
+                n_exact_pre += 1
+            elif _fuzzy_war_match(inc_norm, inc_party) is not None:
+                n_fuzzy_pre += 1
+        n_total = n_exact_pre + n_fuzzy_pre
+        print(f"  WAR persistence:        β={WAR_PERSISTENCE_COEF}  "
+              f"({n_total}/{len(df)} incumbents matched: "
+              f"{n_exact_pre} exact, {n_fuzzy_pre} fuzzy)")
+    print()
+
     results_by_scenario = {}
     for env_dial in envs:
         label = f"D+{env_dial:.0f}" if env_dial >= 0 else f"R+{-env_dial:.0f}"
@@ -581,8 +807,66 @@ def main():
         first_result = results_by_scenario[first_env]
         print_district_table(df, first_result, args.show_districts)
 
-    if not args.no_save:
+    if not args.no_save and (not args.sigma_split or args.sigma_split != "compare"):
         save_scenario_output(results_by_scenario, df)
+
+    # --sigma-split compare: run both parameterizations and show side-by-side
+    if args.sigma_split == "compare":
+        print(f"\n\n{'='*72}")
+        print("  SIGMA SPLIT COMPARISON  (D+5 scenario)")
+        print(f"{'='*72}")
+
+        compare_env = CURRENT_ENV
+        compare_results = {}
+
+        for split_name, split_cfg in SIGMA_SPLITS.items():
+            # Temporarily override sigmas
+            saved_nat, saved_idio = SIGMA_NATIONAL, SIGMA_IDIO
+            # Need to modify module-level vars for run_monte_carlo
+            import model as _self
+            _self.SIGMA_NATIONAL = split_cfg["national"]
+            _self.SIGMA_IDIO = split_cfg["idio"]
+
+            result = run_monte_carlo(df, compare_env, race_generic, N_SIMULATIONS)
+            compare_results[split_name] = result
+
+            _self.SIGMA_NATIONAL = saved_nat
+            _self.SIGMA_IDIO = saved_idio
+
+        print(f"\n  {'':20s}  {'high-corr':>12s}  {'low-corr':>12s}  {'Difference':>12s}")
+        print(f"  {'-'*60}")
+
+        hi = compare_results["high-corr"]
+        lo = compare_results["low-corr"]
+
+        metrics = [
+            ("Expected D House",    hi["expected_house_seats"],   lo["expected_house_seats"]),
+            ("P(D House majority)", hi["house_control_prob"]*100, lo["house_control_prob"]*100),
+            ("House P10",           np.percentile(hi["house_seat_dist"], 10),
+                                    np.percentile(lo["house_seat_dist"], 10)),
+            ("House P25",           np.percentile(hi["house_seat_dist"], 25),
+                                    np.percentile(lo["house_seat_dist"], 25)),
+            ("House P75",           np.percentile(hi["house_seat_dist"], 75),
+                                    np.percentile(lo["house_seat_dist"], 75)),
+            ("House P90",           np.percentile(hi["house_seat_dist"], 90),
+                                    np.percentile(lo["house_seat_dist"], 90)),
+            ("P10-P90 spread",      np.percentile(hi["house_seat_dist"], 90) - np.percentile(hi["house_seat_dist"], 10),
+                                    np.percentile(lo["house_seat_dist"], 90) - np.percentile(lo["house_seat_dist"], 10)),
+            ("Expected D Senate",   hi["expected_senate_seats"],  lo["expected_senate_seats"]),
+        ]
+
+        for label, hi_val, lo_val in metrics:
+            fmt = ".1f" if "P(" not in label else ".1f"
+            suffix = "%" if "P(" in label else ""
+            print(f"  {label:20s}  {hi_val:>11{fmt}}{suffix}  {lo_val:>11{fmt}}{suffix}  "
+                  f"{lo_val - hi_val:>+11{fmt}}{suffix}")
+
+        print(f"\n  high-corr: σ_nat={SIGMA_SPLITS['high-corr']['national']}, "
+              f"σ_idio={SIGMA_SPLITS['high-corr']['idio']:.3f} "
+              f"({SIGMA_SPLITS['high-corr']['desc']})")
+        print(f"  low-corr:  σ_nat={SIGMA_SPLITS['low-corr']['national']}, "
+              f"σ_idio={SIGMA_SPLITS['low-corr']['idio']:.3f} "
+              f"({SIGMA_SPLITS['low-corr']['desc']})")
 
 
 if __name__ == "__main__":

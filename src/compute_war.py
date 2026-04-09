@@ -304,22 +304,32 @@ def predict_dem_share(df: pd.DataFrame) -> pd.Series:
 # Compute per-race WAR
 # ---------------------------------------------------------------------------
 
-SIGMA = COEFS["sigma"]   # regression residual SE = 0.0785
+SIGMA_FULL_MODEL = COEFS["sigma"]   # full model residual SE = 0.0785
+# Will be replaced with actual no-finance residual SE after computing WAR
+SIGMA_WAR_BASELINE = None
 
 
-def _warp(actual: float, predicted: float) -> float:
+def _warp(actual: float, predicted: float, sigma: float) -> float:
     """
     Wins Above Replacement in Probability.
     How much did this candidate shift P(win) vs. a replacement-level candidate?
     Positive = increased party's win probability.
+    Uses the WAR baseline σ (no-finance model), not the full-model σ.
     """
-    return float(norm.cdf((actual - 0.5) / SIGMA) - norm.cdf((predicted - 0.5) / SIGMA))
+    return float(norm.cdf((actual - 0.5) / sigma) - norm.cdf((predicted - 0.5) / sigma))
 
 
 def compute_race_war(df: pd.DataFrame) -> pd.DataFrame:
+    global SIGMA_WAR_BASELINE
     df = df.copy()
     df["predicted_dem_share"] = predict_dem_share(df)
     df["raw_war"]             = df["dem_2p_share"] - df["predicted_dem_share"]
+
+    # Compute actual residual SE from the no-finance baseline
+    # This is larger than SIGMA_FULL_MODEL because the WAR baseline
+    # excludes finance terms (challenger_viability_flag, dem_fundraising_share)
+    SIGMA_WAR_BASELINE = float(np.sqrt((df["raw_war"]**2).mean()))
+    print(f"  Full model sigma=0.0785, WAR baseline sigma={SIGMA_WAR_BASELINE:.4f}")
 
     # Build long-form table: one row per candidate per race
     rows = []
@@ -341,7 +351,7 @@ def compute_race_war(df: pd.DataFrame) -> pd.DataFrame:
         is_comp = (0.30 <= pred <= 0.70) and (0.30 <= actual <= 0.70)
 
         # WARP: from D perspective (positive = D shifted P(win) upward)
-        warp_d = _warp(actual, pred)
+        warp_d = _warp(actual, pred, SIGMA_WAR_BASELINE)
         warp_r = -warp_d   # R candidate gets opposite sign
 
         if d_name and d_norm:

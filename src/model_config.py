@@ -90,12 +90,10 @@ REGRESSION_COEFFICIENTS: dict[str, float] = {
     "dem_incumbent":              0.0600,
     "rep_incumbent":             -0.0739,
     "chamber_senate":            -0.0261,
-    # national_env: using with_pres model coefficient (0.0052) instead of full model (0.0027).
-    # The full model's coefficient is suppressed by finance collinearity — finance vars absorb
-    # ~48% of the environment signal. Since we're running without full dem_fundraising_share
-    # (only the binary viability flag), the finance-diluted coefficient understates env sensitivity.
-    # Switch back to 0.0027 after July TEC filing when dem_fundraising_share is fully populated.
-    "national_env":               0.0052,  # with_pres model; switch to 0.0027 post-July with full finance
+    # national_env: auto-selected based on FINANCE_DATA_THROUGH (see below).
+    # Pre-July: 0.0052 (with_pres model, less suppressed by finance collinearity)
+    # Post-July: 0.0027 (full model, when dem_fundraising_share is fully populated)
+    "national_env":               None,  # set automatically by _auto_select_env_coef()
     "challenger_viability_flag":  0.0393,
     # dem_fundraising_share: D raised / (D+R raised). From full model = +0.0624 per unit (0–1).
     # NOTE: This coefficient is temporally unstable — early cycles (2002–2010): +0.22,
@@ -161,6 +159,45 @@ FINANCE_DATA_THROUGH = "2026-03-31"  # last TEC filing deadline captured
 FINANCE_CUTOFF_POSTPRIMARY = "20260430"  # April 30 cutoff for early-cycle flag
 
 # ---------------------------------------------------------------------------
+# Auto-select national_env coefficient based on finance data currency
+# ---------------------------------------------------------------------------
+# Pre-July: dem_fundraising_share is sparse/unreliable, so the full-model
+# coefficient (0.0027) understates environment sensitivity due to collinearity
+# with finance vars. Use with_pres coefficient (0.0052) instead.
+# Post-July: TEC semi-annual filing populates dem_fundraising_share fully,
+# so the full-model coefficient is appropriate.
+#
+# Set NATIONAL_ENV_COEF_OVERRIDE to force a specific value (bypasses auto).
+NATIONAL_ENV_COEF_OVERRIDE: float | None = None
+
+_ENV_COEF_WITH_PRES = 0.0052   # less suppressed by finance collinearity
+_ENV_COEF_FULL_MODEL = 0.0027  # full model with finance vars active
+
+def _auto_select_env_coef() -> float:
+    """Select national_env coefficient based on FINANCE_DATA_THROUGH date."""
+    if NATIONAL_ENV_COEF_OVERRIDE is not None:
+        print(f"  national_env coefficient: {NATIONAL_ENV_COEF_OVERRIDE} (manual override)")
+        return NATIONAL_ENV_COEF_OVERRIDE
+
+    try:
+        month = int(FINANCE_DATA_THROUGH.replace("-", "")[4:6])
+    except (ValueError, IndexError):
+        month = 1
+
+    if month >= 7:
+        print(f"  Post-July: using full-model environment coefficient ({_ENV_COEF_FULL_MODEL})")
+        if "dem_fundraising_share" not in REGRESSION_COEFFICIENTS:
+            print("  WARNING: dem_fundraising_share not in REGRESSION_COEFFICIENTS "
+                  "but using post-July coefficient")
+        return _ENV_COEF_FULL_MODEL
+    else:
+        print(f"  Pre-July: using with_pres environment coefficient ({_ENV_COEF_WITH_PRES})")
+        return _ENV_COEF_WITH_PRES
+
+# Apply auto-selection at import time
+REGRESSION_COEFFICIENTS["national_env"] = _auto_select_env_coef()
+
+# ---------------------------------------------------------------------------
 # Model scenarios
 # ---------------------------------------------------------------------------
 # National environment dial: ABSOLUTE D-R generic ballot margin (percentage points).
@@ -183,6 +220,20 @@ FINANCE_CUTOFF_POSTPRIMARY = "20260430"  # April 30 cutoff for early-cycle flag
 #  +8 → strong D wave (2018-level)
 
 ENV_SCENARIOS: list[int] = [-3, 0, 3, 5, 8]
+
+# ---------------------------------------------------------------------------
+# WAR (Wins Above Replacement) persistence
+# ---------------------------------------------------------------------------
+# Empirically estimated from 91 candidate-pairs across 2018→2022 and 2022→2024.
+#   Combined β = 0.432  (r=0.508, p<0.0001)
+#   Competitive only β = 0.459  (r=0.531, p<0.0001)
+#   2022→2024 only  β = 0.549  (more weight on recent cycle)
+# Using 0.46 as the working estimate (rounds competitive β, skews toward recent).
+#
+# Applied only to incumbents found in data/processed/candidate_war.csv.
+# For those districts, challenger_viability_flag and dem_fundraising_share
+# are dropped from the baseline (WAR already incorporates fundraising ability).
+WAR_PERSISTENCE_COEF: float = 0.46
 
 # Monte Carlo simulation count
 N_SIMULATIONS: int = 10_000
