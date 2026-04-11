@@ -241,20 +241,22 @@ WAR_PERSISTENCE_COEF: float = 0.46
 # National racial crosstabs systematically overestimate Hispanic D support in TX.
 # 2022 backtest regression: error ~ +0.068 * hispanic_cvap_pct (p=0.057).
 # Full regression-implied adjustment is -0.07, but 2022 was peak Hispanic-R
-# divergence (inflation frustration). Ecological decomposition of presidential
-# results shows TX-national Hispanic gap was ~0pp in both 2020 and 2024.
-# Nov 2025 UnidosUS TX oversample shows gap closing on generic ballot.
-# Persistent structural gap (South TX geographic sorting) is ~3-5pp;
-# the additional 2-4pp in 2022 appears cyclical.
+# divergence (inflation frustration).
 #
-# -0.04 captures the persistent component without overcorrecting.
-# At -0.04: 50% Hispanic district shifts -2.0pp, 80% district shifts -3.2pp.
-# 2022 backtest: accuracy 96.9% (same as -0.07), seat error +7.6 (vs +6.1).
+# 2018 backtest validation (Apr 11 2026, with proper 2014-2018 ACS CVAP under
+# H2100/S2100 districts and Mar-Jun 2018 polling crosstabs from 4 polls):
+#   adj=0.00  house_err=+5.9  brier=0.068  acc=90.1%
+#   adj=-0.04 house_err=+3.5  brier=0.066  acc=92.1%
+#   adj=-0.07 house_err=+1.6  brier=0.065  acc=91.1%
+# A structural Hispanic gap was already present in 2018 — pre-realignment, in
+# a Beto wave year. The pure-cyclical "LIFO" interpretation is not supported.
 #
-# TODO: Validate with 2018 backtest (needs 2016 presidential data by district)
-# to test whether the gap existed pre-realignment.
+# -0.05 chosen as compromise: 2018 evidence supports a real structural gap
+# beyond the 2022 cyclical spike, but going to -0.07 risks overcorrecting if
+# 2026 sees Hispanic D reversion.
+# At -0.05: 50% Hispanic district shifts -2.5pp, 80% district shifts -4.0pp.
 # Set to 0.0 to disable.
-TX_HISPANIC_ADJUSTMENT: float = -0.04
+TX_HISPANIC_ADJUSTMENT: float = -0.05
 
 # Monte Carlo simulation count
 N_SIMULATIONS: int = 10_000

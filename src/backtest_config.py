@@ -124,7 +124,7 @@ BACKTEST_CONFIGS: dict[int, dict] = {
             "Racial crosstabs from Catalist validated voter estimates."
         ),
         # TX-specific Hispanic adjustment (see model_config.py for explanation)
-        "tx_hispanic_adjustment": -0.04,
+        "tx_hispanic_adjustment": -0.05,
 
         "source": "Catalist whathappened2022, Pew validated voters July 2023, TEC finance 2022",
         "updated": "2026-04-09",
@@ -136,30 +136,34 @@ BACKTEST_CONFIGS: dict[int, dict] = {
     # Environment: D+8 to D+9 nationally (strong Democratic wave building)
     # Generic ballot: FiveThirtyEight aggregate ~D+8 in April 2018
     #
-    # Race-specific crosstabs (ESTIMATED — verify with Civiqs April 2018):
-    #   White non-Hispanic: D+4 (~52% D 2p) — wave environment boosted white Dem support
-    #   Black non-Hispanic: D+88 (~88% D 2p) — stable
-    #   Hispanic: D+34 (~67% D 2p) — pre-2020 realignment, stronger Dem lean
-    #   Other: D+28 (~64% D 2p) — Asians/AIAN more Dem than current
+    # Race-specific crosstabs — DERIVED from 4 polls fielded March-June 2018:
+    #   - Harvard-Harris (April, May, June 2018; online RV)
+    #   - Pew Research Political Survey (June 5-12, 2018; phone RV)
+    #   Simple average of D 2-party share across all available polls.
+    #   See: harvardharrispoll.com (Apr/May/Jun 2018 crosstab memos);
+    #        pewresearch.org/politics/2018/06/20/2-the-2018-congressional-election/
+    #   White: 0.460 (avg of 4 polls; range 0.446-0.470)
+    #   Black: 0.884 (avg of 4 polls; range 0.828-0.929)
+    #   Hispanic: 0.677 (avg of 4 polls; range 0.610-0.740)
+    #   Other: 0.594 (avg of 3 HHP polls; Pew did not report)
     #
     # *** IMPORTANT: 2018 used PRE-redistricting maps ***
-    # District numbers and boundaries differ from 2022+.
-    # CVAP data is NOT available for old district boundaries.
-    # This backtest will use current CVAP as an approximation (districts overlap
-    # significantly with current ones in many regions; border/suburban exceptions).
+    # District numbers and boundaries differ from 2022+. CVAP loaded from
+    # 2014-2018 ACS (cvap_vintage_year=2018), keyed under H2100/S2100 GEOIDs.
     # -----------------------------------------------------------------------
     2018: {
         "label": "2018 TX Legislative — As of April 2018",
         "pres_year": 2016,          # presidential year for partisan baseline
         "map_year": 2018,           # district boundary year (pre-redistricting)
         "results_year": 2018,       # actual outcomes to validate against
+        "cvap_vintage_year": 2018,  # ACS 5-year CVAP under H2100/S2100 districts
 
-        # Race-specific generic ballot D 2p share (ESTIMATED — update from Civiqs)
+        # Race-specific generic ballot D 2p share — March-June 2018 poll average
         "race_generic_ballot_d_share": {
-            "white_nh": 0.44,       # ~D+8 nationally, wave environment
-            "black_nh": 0.88,
-            "hispanic": 0.67,       # Pre-2020 TX Hispanic lean (significantly more D)
-            "other":    0.64,
+            "white_nh": 0.460,
+            "black_nh": 0.884,
+            "hispanic": 0.677,
+            "other":    0.594,
         },
 
         "national_demo_weights": NATIONAL_DEMO_WEIGHTS_2018,
@@ -186,17 +190,17 @@ BACKTEST_CONFIGS: dict[int, dict] = {
         # TX-specific Hispanic adjustment (same coefficient; pre-2020 realignment
         # may mean the actual gap was smaller in 2018, but no TX-specific validated
         # data exists to calibrate separately)
-        "tx_hispanic_adjustment": -0.04,
+        "tx_hispanic_adjustment": -0.05,
 
         "notes": (
-            "2018 used pre-2021 redistricting maps (different district boundaries). "
-            "CVAP data for old districts is approximated using current district CVAP. "
-            "2016 presidential baseline requires crosswalk via precincts18g_districts.xlsx. "
+            "2018 used pre-2021 redistricting maps (PlanH2100/PlanS2100). "
+            "CVAP loaded from 2014-2018 ACS keyed under old district GEOIDs. "
+            "2016 presidential baseline derived from TX Capitol VTD data joined "
+            "to precincts20g_districts.xlsx (same H2100/S2100 plan as 2018). "
             "Beto O'Rourke's unusually strong Senate run likely boosted all Dem down-ballot. "
-            "This backtest has higher uncertainty than 2022 due to boundary changes. "
-            "NOTE: Generic ballot values are ESTIMATED — update from Civiqs historical."
+            "Generic ballot values are average of 4 polls fielded March-June 2018."
         ),
-        "source": "ESTIMATED from 2018 exit polls and historical polling; update with Civiqs",
-        "updated": "2026-04-06",
+        "source": "Harvard-Harris Apr/May/Jun 2018 + Pew Jun 2018 (avg of 4 polls)",
+        "updated": "2026-04-11",
     },
 }

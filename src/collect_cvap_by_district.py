@@ -328,11 +328,20 @@ def main():
                   f"Other={row['pct_other']:.0f}%")
 
     print("\nStep 3: Write output")
+    # Default year (current model) writes to data/raw/. Historical years
+    # write to data/raw/historical/ with a year suffix so backtests can
+    # load the appropriate vintage without clobbering current data.
+    DEFAULT_YEAR = 2023
     for chamber, df in results.items():
-        out_path = DATA_RAW / f"tx_cvap_{chamber}.csv"
+        if args.year == DEFAULT_YEAR:
+            out_path = DATA_RAW / f"tx_cvap_{chamber}.csv"
+        else:
+            out_dir = DATA_RAW / "historical"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"tx_cvap_{chamber}_{args.year}.csv"
         df["acs_year"] = args.year
         df.to_csv(out_path, index=False)
-        print(f"  Wrote {out_path.name}")
+        print(f"  Wrote {out_path.relative_to(DATA_RAW.parent.parent)}")
 
     # Statewide sanity check
     if "house" in results:

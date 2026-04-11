@@ -91,14 +91,19 @@ def load_presidential_baseline(pres_year: int, chamber: str) -> pd.DataFrame | N
     return None
 
 
-def load_cvap(chamber: str) -> pd.DataFrame | None:
+def load_cvap(chamber: str, vintage_year: int | None = None) -> pd.DataFrame | None:
     """
     Load CVAP demographics by district.
-    Note: This is current (2022-cycle) CVAP. For 2018 backtest, boundaries differ.
+    If vintage_year is given, load the year-specific historical file
+    (data/raw/historical/tx_cvap_{chamber}_{vintage_year}.csv); else load
+    the current file (data/raw/tx_cvap_{chamber}.csv).
     """
-    path = DATA_RAW / f"tx_cvap_{chamber}.csv"
+    if vintage_year is not None:
+        path = DATA_HIST / f"tx_cvap_{chamber}_{vintage_year}.csv"
+    else:
+        path = DATA_RAW / f"tx_cvap_{chamber}.csv"
     if not path.exists():
-        print(f"  WARNING: tx_cvap_{chamber}.csv not found. Run collect_cvap_by_district.py first.")
+        print(f"  WARNING: {path.name} not found. Run collect_cvap_by_district.py first.")
         return None
     df = pd.read_csv(path)
     df["district"] = df["district"].astype(int)
@@ -166,10 +171,13 @@ def build_backtest_df(config: dict, chamber: str,
     # Load presidential baseline
     pres_df = load_presidential_baseline(pres_year, chamber)
 
-    # Load CVAP (current boundaries — approximate for 2018)
-    cvap_df = load_cvap(chamber)
-    if map_year == 2018 and cvap_df is not None:
-        print(f"  NOTE: Using current CVAP for 2018 backtest (boundary approximation)")
+    # Load CVAP — use vintage matching the district lines for the cycle.
+    # 2018 uses pre-redistricting H2100/S2100 districts; load 2014-2018 ACS
+    # CVAP keyed under those old GEOIDs.
+    cvap_vintage = config.get("cvap_vintage_year")
+    cvap_df = load_cvap(chamber, vintage_year=cvap_vintage)
+    if cvap_vintage is not None and cvap_df is not None:
+        print(f"  Using CVAP vintage {cvap_vintage} (matches {map_year} district boundaries)")
 
     # Build one row per district
     rows = []

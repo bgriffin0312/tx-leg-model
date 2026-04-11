@@ -41,6 +41,7 @@ Usage:
 import argparse
 import io
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -85,13 +86,32 @@ PRECINCT_MAP_INFO = {
         "note": "Post-2021 redistricting plans (same as 2024 and 2026)",
     },
     2018: {
-        "filename": "precincts18g_districts.xlsx",
-        "house_col": None,   # will be detected from file
-        "senate_col": None,  # will be detected from file
+        # The TX Capitol "precincts" package only publishes mapping files
+        # back to 2020G. The 2020G file (precincts20g_districts.xlsx) uses
+        # PlanH2100/PlanS2100, which is the SAME plan that 2018 and 2016
+        # were run under (post-2013 court-remedy version of PlanH358).
+        # So we use the 2020G mapping as the proxy for 2016/2018 districts.
+        "filename": "precincts20g_districts.xlsx",
+        "house_col": "PlanH2100",
+        "senate_col": "PlanS2100",
         "n_house": 150,
         "n_senate": 31,
-        "note": "Pre-2021 redistricting plans (old boundaries)",
+        "note": "Pre-2021 redistricting plans (PlanH2100/PlanS2100); 2020G file used as proxy for 2016/2018 districts",
     },
+}
+
+# Hardcoded URL overrides for years where CKAN discovery is brittle.
+# 2016 returns are in a different CKAN package (historical_elections_2010s).
+# 2018 mapping is the 2020G precinct file (same H2100/S2100 plan).
+DIRECT_URLS: dict[tuple[str, int], str] = {
+    ("election_zip", 2016): (
+        "https://data.capitol.texas.gov/dataset/aab5e1e5-d585-4542-9ae8-1108f45fce5b/"
+        "resource/7b4f545e-38a7-43c6-b486-59b84ce92e40/download/ftp_election_data_16g.zip"
+    ),
+    ("precinct_map", 2018): (
+        "https://data.capitol.texas.gov/dataset/d04c72b9-16c4-4ab2-8c6d-c666d41e04b7/"
+        "resource/bacf6f2c-58b1-4870-978d-d7727a3eb679/download/precints20g_districts_2020.xlsx"
+    ),
 }
 
 # Statewide validation targets (Trump 2p share)
@@ -137,6 +157,12 @@ def find_election_zip_url(pres_year: int) -> str | None:
     The TX Capitol portal has comprehensive election ZIPs by general election year.
     Presidential elections are in Nov of election year (2020 or 2016).
     """
+    # Direct URL override (2016 lives in a different CKAN package)
+    if ("election_zip", pres_year) in DIRECT_URLS:
+        url = DIRECT_URLS[("election_zip", pres_year)]
+        print(f"  Using direct URL: {url}")
+        return url
+
     elec_year = pres_year  # presidential elections are in Nov of that year
     target_filename = f"{elec_year}-general-vtds-election-data.zip"
 
@@ -171,6 +197,12 @@ def find_precinct_map_url(map_year: int) -> str | None:
     Discover the download URL for the precincts{YY}g_districts.xlsx file.
     map_year: the general election year (e.g. 2022 or 2018)
     """
+    # Direct URL override (e.g., 2018 maps to the 2020G file)
+    if ("precinct_map", map_year) in DIRECT_URLS:
+        url = DIRECT_URLS[("precinct_map", map_year)]
+        print(f"  Using direct URL: {url}")
+        return url
+
     suffix = f"{str(map_year)[2:]}g"  # e.g. "22g" for 2022
     filename = f"precincts{suffix}_districts.xlsx"
 
@@ -362,34 +394,55 @@ def aggregate_presidential(df_elec: pd.DataFrame, df_map: pd.DataFrame,
         lambda n: classify_candidate(n, classifiers)
     )
     pres["Votes"] = pd.to_numeric(pres["Votes"], errors="coerce").fillna(0)
-    pres["cntyvtd"] = pd.to_numeric(pres["cntyvtd"], errors="coerce")
+
+    # Build a string PCTKEY from FIPS + VTD (handles both clean integer
+    # precincts and split-precinct rows like '0001A' that have NaN cntyvtd).
+    pres["pctkey_str"] = pres["FIPS"].astype(str) + pres["VTD"].astype(str)
 
     # Print classification summary
     type_counts = pres.groupby("candidate_type")["Votes"].sum()
     print(f"  Vote totals by type: {type_counts.to_dict()}")
 
     # Pivot: one row per VTD
-    vtd_pres = (pres.groupby(["cntyvtd", "candidate_type"])["Votes"]
+    vtd_pres = (pres.groupby(["pctkey_str", "candidate_type"])["Votes"]
                 .sum().unstack(fill_value=0).reset_index())
     for col in ("dem", "rep", "other"):
         if col not in vtd_pres.columns:
             vtd_pres[col] = 0
 
-    # Join precinct mapping
+    # Build precinct mapping as string PCTKEY -> (house_dist, senate_dist)
     df_map = df_map.copy()
-    df_map["PCTKEY"] = pd.to_numeric(df_map["PCTKEY"], errors="coerce")
-    df_map = df_map.dropna(subset=["PCTKEY"])
-    if house_col:
+    df_map["PCTKEY"] = df_map["PCTKEY"].astype(str)
+    if house_col and house_col in df_map.columns:
         df_map = df_map.dropna(subset=[house_col])
-        df_map[house_col] = df_map[house_col].astype(int)
-    if senate_col:
+    if senate_col and senate_col in df_map.columns:
         df_map = df_map.dropna(subset=[senate_col])
-        df_map[senate_col] = df_map[senate_col].astype(int)
+    if house_col:
+        df_map[house_col] = pd.to_numeric(df_map[house_col], errors="coerce").astype("Int64")
+    if senate_col:
+        df_map[senate_col] = pd.to_numeric(df_map[senate_col], errors="coerce").astype("Int64")
 
     keep_cols = ["PCTKEY"] + ([house_col] if house_col else []) + ([senate_col] if senate_col else [])
+    map_lookup = df_map[keep_cols].drop_duplicates("PCTKEY").set_index("PCTKEY")
+    valid_pctkeys = set(map_lookup.index)
+
+    # Two-pass match: exact PCTKEY first, then strip trailing uppercase letter
+    # (handles 2016-style split-precinct codes like '0001A' / '0001B' that
+    # were consolidated by 2020). This recovers ~3.5pp of vote coverage in 2016.
+    def resolve_pctkey(pk: str) -> str | None:
+        if pk in valid_pctkeys:
+            return pk
+        stripped = re.sub(r"[A-Z]$", "", pk)
+        if stripped != pk and stripped in valid_pctkeys:
+            return stripped
+        return None
+
+    vtd_pres["matched_pctkey"] = vtd_pres["pctkey_str"].apply(resolve_pctkey)
+    matched_share = vtd_pres["matched_pctkey"].notna().mean()
+    print(f"  PCTKEY match rate: {matched_share*100:.2f}% of VTD-rows")
+
     merged = vtd_pres.merge(
-        df_map[keep_cols],
-        left_on="cntyvtd", right_on="PCTKEY", how="left"
+        map_lookup, left_on="matched_pctkey", right_index=True, how="left"
     )
 
     unmatched = merged[house_col].isna().sum() if house_col else 0
@@ -398,7 +451,7 @@ def aggregate_presidential(df_elec: pd.DataFrame, df_map: pd.DataFrame,
                        if house_col and unmatched > 0 else 0)
     pct_unmatched = unmatched_votes / total_votes * 100 if total_votes > 0 else 0
     print(f"  Join: {unmatched} VTDs unmatched ({unmatched_votes:,.0f} / {total_votes:,.0f} "
-          f"votes = {pct_unmatched:.1f}% unassigned)")
+          f"votes = {pct_unmatched:.2f}% unassigned)")
 
     def make_district_df(dist_col: str, chamber_name: str, n_max: int) -> pd.DataFrame | None:
         if dist_col is None or dist_col not in merged.columns:
