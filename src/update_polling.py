@@ -15,9 +15,9 @@ SOURCES:
      by hand (e.g., from Pew, ANES, or paywalled aggregators).
 
 AGGREGATION:
-  - Filter to last 30 days (configurable)
+  - Filter to last 45 days (configurable)
   - Exclude Rasmussen racial subgroups (known R-lean outlier; topline kept)
-  - Recency weighting: last 14 days = 2x, 15-30 days = 1x
+  - Recency weighting: last 14 days = 2x, 15-45 days = 1x
   - Weighted average across all sources with racial crosstabs
   - Other/Asian solved from topline constraint
 
@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 USER_AGENT = "TXLegislativeModel/1.0 (academic research)"
 
 # Aggregation parameters
-WINDOW_DAYS = 30          # only polls within this many days
+WINDOW_DAYS = 45          # only polls within this many days
 RECENCY_BOOST_DAYS = 14   # polls within this many days get 2x weight
 RASMUSSEN_EXCLUDE_RACIAL = True  # exclude Rasmussen racial subgroups
 
@@ -724,9 +724,15 @@ def apply_to_config(agg: dict, other_d2p: float):
         "other": other_d2p,
     }
 
+    # Only replace values in RACE_GENERIC_BALLOT_D_SHARE, not NATIONAL_DEMO_WEIGHTS.
+    # Find the RACE_GENERIC_BALLOT block and replace only within it.
+    block_start = text.index("RACE_GENERIC_BALLOT_D_SHARE")
+    block_end = text.index("}", block_start) + 1
+    block = text[block_start:block_end]
     for config_key, new_val in new_vals.items():
         pattern = rf'("{config_key}":\s*)[\d.]+'
-        text = re.sub(pattern, rf'\g<1>{new_val:.4f}', text)
+        block = re.sub(pattern, rf'\g<1>{new_val:.4f}', block)
+    text = text[:block_start] + block + text[block_end:]
 
     today_str = date.today().isoformat()
     new_topline = agg["topline_d2p"] or 0.5

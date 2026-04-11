@@ -36,27 +36,27 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4504,
+    "white_nh": 0.4523,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8321,
+    "black_nh": 0.8919,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.5899,
+    "hispanic": 0.5684,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.5056,
+    "other": 0.4837,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "DDHQ data.ddhq.io (2026-04-05); white/black/hispanic from IDs 452/446/448; other solved from topline constraint"
-GENERIC_BALLOT_UPDATED = "2026-04-06"  # ISO date
+GENERIC_BALLOT_SOURCE = "Multi-source 5-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_UPDATED = "2026-04-09"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5238  # D+5.0pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5262  # D+5.0pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)
@@ -234,6 +234,27 @@ ENV_SCENARIOS: list[int] = [-3, 0, 3, 5, 8]
 # For those districts, challenger_viability_flag and dem_fundraising_share
 # are dropped from the baseline (WAR already incorporates fundraising ability).
 WAR_PERSISTENCE_COEF: float = 0.46
+
+# ---------------------------------------------------------------------------
+# TX-specific Hispanic voting adjustment
+# ---------------------------------------------------------------------------
+# National racial crosstabs systematically overestimate Hispanic D support in TX.
+# 2022 backtest regression: error ~ +0.068 * hispanic_cvap_pct (p=0.057).
+# Full regression-implied adjustment is -0.07, but 2022 was peak Hispanic-R
+# divergence (inflation frustration). Ecological decomposition of presidential
+# results shows TX-national Hispanic gap was ~0pp in both 2020 and 2024.
+# Nov 2025 UnidosUS TX oversample shows gap closing on generic ballot.
+# Persistent structural gap (South TX geographic sorting) is ~3-5pp;
+# the additional 2-4pp in 2022 appears cyclical.
+#
+# -0.04 captures the persistent component without overcorrecting.
+# At -0.04: 50% Hispanic district shifts -2.0pp, 80% district shifts -3.2pp.
+# 2022 backtest: accuracy 96.9% (same as -0.07), seat error +7.6 (vs +6.1).
+#
+# TODO: Validate with 2018 backtest (needs 2016 presidential data by district)
+# to test whether the gap existed pre-realignment.
+# Set to 0.0 to disable.
+TX_HISPANIC_ADJUSTMENT: float = -0.04
 
 # Monte Carlo simulation count
 N_SIMULATIONS: int = 10_000

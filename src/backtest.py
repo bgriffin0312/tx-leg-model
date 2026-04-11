@@ -337,6 +337,12 @@ def build_linear_predictions(df: pd.DataFrame, config: dict) -> pd.Series:
         + coefs["chamber_senate"] * chamber_senate
     )
 
+    # TX-specific Hispanic voting adjustment
+    tx_hisp_adj = config.get("tx_hispanic_adjustment", 0)
+    if tx_hisp_adj != 0:
+        hisp_pct = pd.to_numeric(df.get("pct_hispanic", 0), errors="coerce").fillna(0)
+        predicted += tx_hisp_adj * hisp_pct
+
     # WAR persistence (mirrors model.py dual-track logic)
     war_persistence = config.get("war_persistence_coef", 0.46)
     war_max_year = config.get("war_max_year")

@@ -71,6 +71,7 @@ from model_config import (
     IE_WEIGHT,
     IE_DATA_THROUGH,
     WAR_PERSISTENCE_COEF,
+    TX_HISPANIC_ADJUSTMENT,
 )
 
 _HAS_FUNDRAISING_SHARE = "dem_fundraising_share" in COEFS
@@ -368,6 +369,16 @@ def build_linear_predictions(df: pd.DataFrame,
         + COEFS["rep_incumbent"] * rep_inc
         + COEFS["chamber_senate"] * chamber_senate
     )
+
+    # TX-specific Hispanic voting adjustment
+    # National crosstabs overestimate Hispanic D support in TX by ~7pp.
+    # Applied proportionally to each district's Hispanic CVAP share.
+    if TX_HISPANIC_ADJUSTMENT != 0:
+        hisp_pct = pd.to_numeric(df.get("pct_hispanic", 0), errors="coerce").fillna(0)
+        # Normalize: if stored as percentage (>1), convert to fraction
+        hisp_pct = hisp_pct.where(hisp_pct <= 1.0, hisp_pct / 100.0)
+        tx_hisp_adj = TX_HISPANIC_ADJUSTMENT * hisp_pct
+        predicted += tx_hisp_adj
 
     # ---------------------------------------------------------------------------
     # Dual-track: WAR persistence (incumbents with career history) vs. finance
