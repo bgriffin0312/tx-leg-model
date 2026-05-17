@@ -103,6 +103,15 @@ def build_rows(scenarios: pd.DataFrame, districts: pd.DataFrame) -> dict:
                 "d_status": str(cr.get("d_status") or "").strip(),
             }
 
+    # Load May 26 runoff pairs so we can show both names instead of "Not Yet Determined"
+    runoff_path = ROOT / "data" / "raw" / "tx_primary_2026_runoffs.csv"
+    runoff_lookup: dict[tuple, str] = {}  # (chamber, district, party) -> "Name1 / Name2"
+    if runoff_path.exists():
+        ro = pd.read_csv(runoff_path)
+        for _, rr in ro.iterrows():
+            k = (str(rr["chamber"]).strip(), int(rr["district"]), str(rr["party"]).strip().upper())
+            runoff_lookup[k] = f"{str(rr['candidate_1']).strip()} / {str(rr['candidate_2']).strip()}"
+
     for _, sm in scen_meta.iterrows():
         scen = sm["scenario"]
         scen_rows = scenarios[scenarios["scenario"] == scen].set_index(
@@ -146,16 +155,27 @@ def build_rows(scenarios: pd.DataFrame, districts: pd.DataFrame) -> dict:
                 d_no_opponent = cand["d_status"] == "none_filed" and not cand["d"]
                 if r_no_opponent or d_no_opponent:
                     uncontested = True
+                # For runoff statuses, look up the May 26 runoff pair and
+                # display both names instead of "Not Yet Determined".
+                r_runoff = runoff_lookup.get((ch, num, "R"))
+                d_runoff = runoff_lookup.get((ch, num, "D"))
                 r_name = cand["r"] if cand["r"] else (
-                    "Not Yet Determined" if cand["r_status"] == "runoff"
+                    (f"{r_runoff} (runoff)" if r_runoff else "Not Yet Determined")
+                    if cand["r_status"] == "runoff"
                     else "No opponent" if cand["r_status"] == "none_filed"
                     else "—"
                 )
                 d_name = cand["d"] if cand["d"] else (
-                    "Not Yet Determined" if cand["d_status"] == "runoff"
+                    (f"{d_runoff} (runoff)" if d_runoff else "Not Yet Determined")
+                    if cand["d_status"] == "runoff"
                     else "No opponent" if cand["d_status"] == "none_filed"
                     else "—"
                 )
+                # Mark incumbents with ★ so the table shows incumbency at a glance
+                if cand["r_status"] == "incumbent" and cand["r"]:
+                    r_name = f"{r_name}★"
+                if cand["d_status"] == "incumbent" and cand["d"]:
+                    d_name = f"{d_name}★"
             elif is_open:
                 r_name = "—"
                 d_name = "—"
@@ -226,7 +246,7 @@ HTML_TEMPLATE = """\
   }}
 
   /* ── Page header ─────────────────────────────────────── */
-  .page-header {{ max-width: 1040px; margin-bottom: 18px; }}
+  .page-header {{ max-width: 1400px; margin-bottom: 18px; }}
   h1 {{ font-size: 21px; font-weight: 700; color: #111; margin-bottom: 5px; }}
   .subtitle {{ font-size: 12px; color: #666; line-height: 1.6; }}
 
@@ -241,7 +261,7 @@ HTML_TEMPLATE = """\
     border-radius: 7px;
     font-size: 13px;
     color: #333;
-    max-width: 1040px;
+    max-width: 1400px;
     flex-wrap: wrap;
   }}
   .scenario-bar .sep {{ color: #ccc; }}
@@ -250,7 +270,7 @@ HTML_TEMPLATE = """\
 
   /* ── Controls ────────────────────────────────────────── */
   .controls {{
-    max-width: 1040px;
+    max-width: 1400px;
     margin-bottom: 12px;
     display: flex;
     flex-wrap: wrap;
@@ -306,7 +326,7 @@ HTML_TEMPLATE = """\
 
   /* ── Table wrapper ───────────────────────────────────── */
   .table-wrap {{
-    max-width: 1040px;
+    max-width: 1400px;
     overflow-x: auto;
     border-radius: 8px;
     box-shadow: 0 1px 6px rgba(0,0,0,0.09);
@@ -434,7 +454,7 @@ HTML_TEMPLATE = """\
   .mg-n {{ color: #aaa; }}
 
   /* ── Row count ───────────────────────────────────────── */
-  .row-count {{ font-size: 12px; color: #999; margin-top: 8px; max-width: 1040px; }}
+  .row-count {{ font-size: 12px; color: #999; margin-top: 8px; max-width: 1400px; }}
 </style>
 </head>
 <body>

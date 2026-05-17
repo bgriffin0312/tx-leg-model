@@ -262,10 +262,12 @@ def build_figure(
     default_scen = default_env[1]
     default_idx  = scenario_cols.index(default_scen) if default_scen in scenario_cols else 0
 
-    # Hover text template (shared across scenarios)
-    def make_hover(col: str) -> list[str]:
+    # Hover text template (shared across scenarios) — accepts a gdf subset so
+    # active-district traces can pass their filtered rows.
+    def make_hover(col: str, hover_gdf: gpd.GeoDataFrame | None = None) -> list[str]:
+        rows_gdf = hover_gdf if hover_gdf is not None else gdf
         texts = []
-        for _, row in gdf.iterrows():
+        for _, row in rows_gdf.iterrows():
             d   = row.get("district_int", "?")
             inc = row.get("incumbent", "?") or "?"
             inc_party = row.get("incumbent_party", "?") or "?"
@@ -287,16 +289,48 @@ def build_figure(
             )
         return texts
 
-    # Build one trace per scenario
+    # Identify districts with no model data (Senate seats not up in 2026).
+    # They get a distinct fill so they don't blend with the gray-toss-up color.
+    has_data_mask = ~gdf[scenario_cols[0]].isna() if scenario_cols else None
+
+    # Build a background "not on ballot" trace once — visible in every scenario.
+    # Uses a tan/beige outside the political colorscale so it reads as "inactive."
+    not_on_ballot_trace = None
+    if has_data_mask is not None and (~has_data_mask).any():
+        nb = gdf[~has_data_mask]
+        not_on_ballot_trace = go.Choropleth(
+            geojson=geojson,
+            locations=[str(d) for d in nb["district_int"]],
+            z=[0.5] * len(nb),  # constant
+            featureidkey="id",
+            colorscale=[[0.0, "#C8B89A"], [1.0, "#C8B89A"]],  # solid khaki/tan
+            showscale=False,
+            zmin=0,
+            zmax=1,
+            marker_line_color="#888888",
+            marker_line_width=0.8,
+            text=[f"<b>SD-{int(r.district_int):03d}</b><br>Not on the 2026 ballot"
+                  for _, r in nb.iterrows()],
+            hovertemplate="%{text}<extra></extra>",
+            visible=True,
+            name="Not on ballot",
+        )
+
+    # Build one trace per scenario (active districts only)
     traces = []
+    if not_on_ballot_trace is not None:
+        traces.append(not_on_ballot_trace)
     for i, (env_dial, scen_label) in enumerate(scenario_list):
         if scen_label not in scenario_cols:
             continue
-        z_vals = gdf[scen_label].fillna(0.5).tolist()
+        # Only include active districts in the political colorscale trace —
+        # not-on-ballot districts are drawn by the background trace above.
+        active_gdf = gdf[has_data_mask] if has_data_mask is not None else gdf
+        z_vals = active_gdf[scen_label].fillna(0.5).tolist()
 
         trace = go.Choropleth(
             geojson=geojson,
-            locations=[str(d) for d in gdf["district_int"]],
+            locations=[str(d) for d in active_gdf["district_int"]],
             z=z_vals,
             featureidkey="id",
             colorscale=COLORSCALE,
@@ -315,7 +349,7 @@ def build_figure(
                 outlinewidth=0,
                 bgcolor="rgba(255,255,255,0.85)",
             ),
-            text=make_hover(scen_label),
+            text=make_hover(scen_label, active_gdf),
             hovertemplate="%{text}<extra></extra>",
             marker_line_color="white",
             marker_line_width=0.5,
@@ -325,12 +359,15 @@ def build_figure(
         traces.append(trace)
 
     # Build scenario dropdown buttons
-    # Each button shows exactly one trace (the one for that scenario)
+    # Each button shows the background "not on ballot" trace (always on) plus
+    # exactly one scenario trace.
+    has_bg = not_on_ballot_trace is not None
     buttons = []
     for i, (env_dial, scen_label) in enumerate(scenario_list):
         if scen_label not in scenario_cols:
             continue
-        visible = [sc == scen_label for _, sc in scenario_list if sc in scenario_cols]
+        scen_visible = [sc == scen_label for _, sc in scenario_list if sc in scenario_cols]
+        visible = ([True] + scen_visible) if has_bg else scen_visible
         abs_margin = abs(env_dial)
         party = "D" if env_dial >= 0 else "R"
         env_str = f"D+{env_dial:.0f}" if env_dial >= 0 else f"R+{abs_margin:.0f}"
