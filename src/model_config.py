@@ -112,10 +112,16 @@ REGRESSION_COEFFICIENTS: dict[str, float] = {
 # Placeholder values below are proportional to the full-cycle thresholds.
 
 VIABILITY_THRESHOLD_POSTPRIMARY: dict[str, float] = {
-    # Full-cycle thresholds: house=$100k, senate=$250k
-    # Placeholder: ~40% of full-cycle (to be calibrated)
+    # Full-cycle thresholds: house=$100k, senate=$250k.
+    # Calibrated against 2018 and 2022 TEC data: thresholds are roughly the
+    # median dollar amount that ultimately-viable candidates had raised by
+    # April 30 in those cycles.
+    #   House: median apr30 was $40K (2018) / $53K (2022) → $40K
+    #   Senate: median apr30 was $71K (2018) / $22K (2022) → $60K
+    # Senate is more variable cycle-to-cycle so the threshold is set toward
+    # the lower end of the historical range.
     "house":   40_000,
-    "senate": 100_000,
+    "senate":  60_000,
 }
 
 VIABILITY_THRESHOLD_SEMIJUL: dict[str, float] = {

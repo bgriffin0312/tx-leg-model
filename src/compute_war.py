@@ -421,6 +421,12 @@ def compute_career_war(race_war: pd.DataFrame) -> pd.DataFrame:
         grp = grp.sort_values("year")
         career_war  = (grp["war_race"]  * grp["cycle_weight"]).sum()
         career_warp = (grp["warp_race"] * grp["cycle_weight"]).sum()
+        # Weighted average WAR: time-decayed, normalized by sum of weights so
+        # 1-cycle candidates aren't penalized vs. multi-cycle vets. Recency
+        # still matters because recent cycles have higher weight in both the
+        # numerator and (cycle's own) denominator term.
+        weight_sum = grp["cycle_weight"].sum()
+        weighted_avg_war = (grp["war_race"] * grp["cycle_weight"]).sum() / weight_sum if weight_sum else None
         n_races     = len(grp)
         avg_war     = grp["war_race"].mean()
 
@@ -445,6 +451,7 @@ def compute_career_war(race_war: pd.DataFrame) -> pd.DataFrame:
             "candidate_norm":   norm_name,
             "party":            party,
             "career_war":       round(career_war, 2),
+            "weighted_avg_war": round(weighted_avg_war, 2) if weighted_avg_war is not None else None,
             "career_warp":      round(career_warp, 2),
             "career_war_comp":  round(career_war_comp, 2) if career_war_comp is not None else None,
             "n_comp_races":     n_comp,
@@ -461,7 +468,7 @@ def compute_career_war(race_war: pd.DataFrame) -> pd.DataFrame:
             "chambers_served":  chambers,
         })
 
-    return pd.DataFrame(grouped).sort_values("career_war", ascending=False).reset_index(drop=True)
+    return pd.DataFrame(grouped).sort_values("weighted_avg_war", ascending=False).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -702,14 +709,14 @@ def main():
     for _, r in career.head(10).iterrows():
         seat = f"{'HD' if r['latest_chamber']=='House' else 'SD'}-{r['latest_district']:03d}"
         print(f"    {r['candidate']:<28s} ({r['party']}) {seat}  "
-              f"Career: {r['career_war']:+.1f}  "
+              f"Wgt-Avg: {r['weighted_avg_war']:+.2f}  Career: {r['career_war']:+.1f}  "
               f"[{r['war_2018'] or '—':>5}  {r['war_2020'] or '—':>5}  {r['war_2022'] or '—':>5}  {r['war_2024'] or '—':>5}]")
 
     print("\n  Bottom 10 by Career WAR:")
     for _, r in career.tail(10).iloc[::-1].iterrows():
         seat = f"{'HD' if r['latest_chamber']=='House' else 'SD'}-{r['latest_district']:03d}"
         print(f"    {r['candidate']:<28s} ({r['party']}) {seat}  "
-              f"Career: {r['career_war']:+.1f}  "
+              f"Wgt-Avg: {r['weighted_avg_war']:+.2f}  Career: {r['career_war']:+.1f}  "
               f"[{r['war_2018'] or '—':>5}  {r['war_2020'] or '—':>5}  {r['war_2022'] or '—':>5}  {r['war_2024'] or '—':>5}]")
 
     # Build HTML
