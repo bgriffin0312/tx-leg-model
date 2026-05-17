@@ -744,12 +744,12 @@ def apply_to_config(agg: dict, other_d2p: float):
 
     text = re.sub(
         r'(GENERIC_BALLOT_SOURCE\s*[:=]\s*(?:str\s*=\s*)?)(["\']).*?\2',
-        rf'\1\2{source_str}\2',
+        rf'\g<1>\g<2>{source_str}\g<2>',
         text,
     )
     text = re.sub(
         r'(GENERIC_BALLOT_UPDATED\s*[:=]\s*(?:str\s*=\s*)?)(["\']).*?\2',
-        rf'\1\2{today_str}\2',
+        rf'\g<1>\g<2>{today_str}\g<2>',
         text,
     )
     text = re.sub(
