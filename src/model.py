@@ -319,10 +319,15 @@ def build_linear_predictions(df: pd.DataFrame,
     dem_inc = df.apply(lambda r: encode_incumbency(r)[0], axis=1)
     rep_inc = df.apply(lambda r: encode_incumbency(r)[1], axis=1)
 
-    # Finance: challenger viability flag
+    # Finance: viable-opposition signal. Prefer the signed version
+    # (-1 = viable R opposition, +1 = viable D opposition, 0 = none) so the
+    # always-positive coefficient pushes the prediction the correct direction
+    # in both D-held and R-held seats. Falls back to the old binary flag
+    # (which assumed all viable opposition was D — incorrect in D-held races).
     challenger_flag = pd.to_numeric(
-        df.get("challenger_viability_flag_early",
-               df.get("challenger_viability_flag", pd.Series(0, index=df.index))),
+        df.get("viable_opposition_signed",
+               df.get("challenger_viability_flag_early",
+                      df.get("challenger_viability_flag", pd.Series(0, index=df.index)))),
         errors="coerce"
     ).fillna(0)
 

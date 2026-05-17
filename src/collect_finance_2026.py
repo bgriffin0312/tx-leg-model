@@ -302,6 +302,28 @@ def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> lis
             threshold = THRESHOLD.get(chamber, 100_000)
             viability_flag = int(opp_total >= threshold)
 
+            # Signed flag: +1 = viable D opposition, -1 = viable R opposition,
+            # 0 = no viable opposition / both parties viable in open seat /
+            # opposition party undetermined. Sign carries the direction of
+            # the partisan signal so the model coefficient (always positive)
+            # pushes the prediction the right way.
+            if viability_flag == 0:
+                viable_opp_signed = 0
+            elif incumbent_party == "R":
+                viable_opp_signed = +1  # viable D opposition to R incumbent
+            elif incumbent_party == "D":
+                viable_opp_signed = -1  # viable R opposition to D incumbent
+            else:
+                # Open seat: sign by which party is viable.
+                d_viable = d_total >= threshold
+                r_viable = r_total >= threshold
+                if d_viable and not r_viable:
+                    viable_opp_signed = +1
+                elif r_viable and not d_viable:
+                    viable_opp_signed = -1
+                else:
+                    viable_opp_signed = 0  # both viable, or neither cleanly assigned
+
             # dem_fundraising_share from actual nominee totals
             # Minimum $10K total raised to compute a meaningful ratio;
             # below that, one-sided filings produce 0.0 or 1.0 from noise
@@ -363,10 +385,25 @@ def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> lis
                 inc_total  = 0.0
                 chal_total = sum(f["total"] for f in filers.values())
                 viability_flag = 0
+                viable_opp_signed = 0
                 dem_fundraising_share = None
             else:
                 threshold = THRESHOLD.get(chamber, 100_000)
                 viability_flag = int(chal_total >= threshold)
+
+                # Legacy path: no party data on challengers. Assume well-funded
+                # opposition is the opposite-party general nominee. This is
+                # mostly true post-primary but produces noise when a same-party
+                # primary challenger raises money — those races are typically
+                # safe enough that the noise doesn't move win probabilities.
+                if viability_flag == 0:
+                    viable_opp_signed = 0
+                elif incumbent_party == "R":
+                    viable_opp_signed = +1
+                elif incumbent_party == "D":
+                    viable_opp_signed = -1
+                else:
+                    viable_opp_signed = 0
 
                 _MIN_TOTAL_FOR_SHARE = 10_000
                 if incumbent_party == "D" and (inc_total + chal_total) >= _MIN_TOTAL_FOR_SHARE:
@@ -393,6 +430,7 @@ def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> lis
             "challenger_names":              chal_display,
             "party_assignment_method":       method,
             "challenger_viability_flag_early": viability_flag,
+            "viable_opposition_signed":      viable_opp_signed,
             "viability_threshold_used":      threshold,
             "open_seat":                     open_seat,
             "data_source":                   "tec_cover_2026",
@@ -416,6 +454,7 @@ def _placeholder_row(chamber: str, district: int,
         "challenger_names":              "",
         "party_assignment_method":       "no_filing",
         "challenger_viability_flag_early": 0,
+        "viable_opposition_signed":      0,
         "viability_threshold_used":      THRESHOLD.get(chamber, 100_000),
         "open_seat":                     False,
         "data_source":                   "no_filing",
@@ -470,7 +509,8 @@ def merge_into_districts(finance_rows: list[dict]):
     }
 
     # New columns to add / update
-    new_cols = ["challenger_viability_flag_early", "incumbent_raised", "challenger_raised", "dem_fundraising_share"]
+    new_cols = ["challenger_viability_flag_early", "viable_opposition_signed",
+                "incumbent_raised", "challenger_raised", "dem_fundraising_share"]
     out_fields = list(orig_fields) + [c for c in new_cols if c not in orig_fields]
 
     updated = 0
@@ -480,6 +520,7 @@ def merge_into_districts(finance_rows: list[dict]):
         fin  = finance_by_key.get((ch, dist))
         if fin:
             row["challenger_viability_flag_early"] = fin["challenger_viability_flag_early"]
+            row["viable_opposition_signed"] = fin.get("viable_opposition_signed", 0)
             row["incumbent_raised"]      = fin.get("incumbent_raised", "")
             row["challenger_raised"]     = fin.get("challenger_raised", "")
             row["dem_fundraising_share"] = fin.get("dem_fundraising_share", "")
@@ -487,6 +528,7 @@ def merge_into_districts(finance_rows: list[dict]):
         else:
             # Explicitly clear — don't preserve stale data from prior runs
             row["challenger_viability_flag_early"] = 0
+            row["viable_opposition_signed"] = 0
             row["incumbent_raised"] = ""
             row["challenger_raised"] = ""
             row["dem_fundraising_share"] = ""
