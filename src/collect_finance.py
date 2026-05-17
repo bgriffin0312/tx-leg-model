@@ -132,10 +132,20 @@ ELECTION_CYCLE_START = {yr: f"{yr}0101" for yr in ELECTION_CYCLE_END}
 
 
 def _tec_range_get(url: str, start: int, end: int) -> bytes | None:
-    """HTTP range request. Returns bytes or None on error."""
+    """HTTP range request. Returns bytes or None on error.
+
+    Note: the TEC server has been observed to silently ignore Range headers
+    and return HTTP 200 with the full file body. Callers that depend on
+    receiving only the requested slice must detect this themselves.
+    """
     headers = {"User-Agent": USER_AGENT, "Range": f"bytes={start}-{end}"}
+    expected = end - start + 1
     try:
         r = requests.get(url, headers=headers, timeout=120)
+        if r.status_code == 200 and len(r.content) > expected * 2:
+            # Server ignored Range and returned the whole file
+            print(f"  TEC range request returned full file (server ignored Range)")
+            return None
         if r.status_code not in (200, 206):
             print(f"  TEC range request failed: HTTP {r.status_code}")
             return None
@@ -145,31 +155,120 @@ def _tec_range_get(url: str, start: int, end: int) -> bytes | None:
         return None
 
 
+# Local-ZIP fallback. When TEC range requests fail (broken HEAD, server ignoring
+# Range), we download the full ~1 GB ZIP once and serve subsequent reads from it.
+_TEC_LOCAL_ZIP_PATH = FINANCE_CACHE / "TEC_CF_CSV.zip"
+_TEC_LOCAL_ZIP_HANDLE: zipfile.ZipFile | None = None
+
+
+def _download_tec_zip_full(url: str) -> Path | None:
+    """Stream the full TEC ZIP to a local cache file. Returns path or None."""
+    if _TEC_LOCAL_ZIP_PATH.exists() and _TEC_LOCAL_ZIP_PATH.stat().st_size > 100_000_000:
+        print(f"  TEC: using cached local ZIP at {_TEC_LOCAL_ZIP_PATH} "
+              f"({_TEC_LOCAL_ZIP_PATH.stat().st_size:,} bytes)")
+        return _TEC_LOCAL_ZIP_PATH
+
+    tmp_path = _TEC_LOCAL_ZIP_PATH.with_suffix(".zip.part")
+    print(f"  TEC: downloading full ZIP to {_TEC_LOCAL_ZIP_PATH} (one-time, ~1 GB)...")
+    try:
+        with requests.get(url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=600) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("Content-Length") or 0)
+            written = 0
+            last_print = 0
+            with open(tmp_path, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                    if not chunk:
+                        continue
+                    fh.write(chunk)
+                    written += len(chunk)
+                    if written - last_print >= 100 * 1024 * 1024:
+                        pct = f" ({100*written/total:.0f}%)" if total else ""
+                        print(f"    downloaded {written/1024/1024:,.0f} MB{pct}")
+                        last_print = written
+    except Exception as exc:
+        print(f"  TEC: full ZIP download failed: {exc}")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        return None
+
+    tmp_path.replace(_TEC_LOCAL_ZIP_PATH)
+    print(f"  TEC: downloaded {_TEC_LOCAL_ZIP_PATH.stat().st_size:,} bytes")
+    return _TEC_LOCAL_ZIP_PATH
+
+
+def _open_local_tec_zip(url: str) -> zipfile.ZipFile | None:
+    """Return a ZipFile handle for the local TEC ZIP, downloading if needed."""
+    global _TEC_LOCAL_ZIP_HANDLE
+    if _TEC_LOCAL_ZIP_HANDLE is not None:
+        return _TEC_LOCAL_ZIP_HANDLE
+    path = _download_tec_zip_full(url)
+    if path is None:
+        return None
+    try:
+        _TEC_LOCAL_ZIP_HANDLE = zipfile.ZipFile(path, "r")
+    except zipfile.BadZipFile as exc:
+        print(f"  TEC: local ZIP is corrupt ({exc}); deleting so next run re-downloads")
+        path.unlink(missing_ok=True)
+        return None
+    return _TEC_LOCAL_ZIP_HANDLE
+
+
+def _tec_central_dir_from_local(url: str) -> dict | None:
+    """Fallback: open the locally-downloaded ZIP and emit the same dict shape
+    as the range-request path. ``local_offset``/``comp_size``/``compression``
+    are placeholders here because _tec_extract_file will go through the
+    local zipfile path instead of doing range reads."""
+    zf = _open_local_tec_zip(url)
+    if zf is None:
+        return None
+    files = {}
+    for info in zf.infolist():
+        files[info.filename] = {
+            "local_offset": info.header_offset,
+            "comp_size": info.compress_size,
+            "uncomp_size": info.file_size,
+            "compression": info.compress_type,
+            "_local": True,  # signal to _tec_extract_file
+        }
+    print(f"  TEC ZIP (local): {len(files)} files found")
+    return files
+
+
 def _tec_zip_central_dir(url: str) -> dict | None:
     """
     Read ZIP central directory from the end of the file without full download.
     Returns dict of {filename: {local_offset, comp_size, uncomp_size, compression}}.
+    Falls back to downloading the full ZIP if HEAD or range requests look broken.
     """
     # Step 1: get file size
+    file_size = None
     try:
         r = requests.head(url, headers={"User-Agent": USER_AGENT}, timeout=30)
         file_size = int(r.headers["Content-Length"])
     except Exception as exc:
         print(f"  TEC HEAD failed: {exc}")
-        return None
+
+    # If HEAD reports a suspiciously small size, it's a broken proxy/redirect
+    # wrapper — go straight to the full-download fallback. The TEC ZIP is
+    # always hundreds of MB.
+    if file_size is None or file_size < 100_000_000:
+        print(f"  TEC HEAD returned suspect size ({file_size}); using local-ZIP fallback")
+        return _tec_central_dir_from_local(url)
 
     # Step 2: download last 65KB to find End-of-Central-Directory (EOCD)
     eocd_chunk_size = min(65558, file_size)
     eocd_start = file_size - eocd_chunk_size
     eocd_data = _tec_range_get(url, eocd_start, file_size - 1)
     if not eocd_data:
-        return None
+        print("  TEC: range request failed; using local-ZIP fallback")
+        return _tec_central_dir_from_local(url)
 
     sig = b"\x50\x4b\x05\x06"
     idx = eocd_data.rfind(sig)
     if idx == -1:
-        print("  TEC: EOCD signature not found")
-        return None
+        print("  TEC: EOCD signature not found; using local-ZIP fallback")
+        return _tec_central_dir_from_local(url)
 
     # Parse EOCD: signature(4) disk(2) disk_start(2) entries_disk(2) entries_total(2)
     #             cd_size(4) cd_offset(4) comment_len(2)
@@ -220,6 +319,20 @@ def _tec_extract_file(url: str, file_info: dict, fname: str) -> bytes | None:
     if cache_path.exists() and cache_path.stat().st_size > 100:
         print(f"  TEC cache hit: {fname}")
         return cache_path.read_bytes()
+
+    # Local-ZIP fallback path: read straight from the downloaded ZIP.
+    if file_info.get("_local"):
+        zf = _open_local_tec_zip(url)
+        if zf is None:
+            return None
+        try:
+            data = zf.read(fname)
+        except KeyError:
+            print(f"  TEC: {fname} not found in local ZIP")
+            return None
+        cache_path.write_bytes(data)
+        print(f"  TEC: extracted {fname} from local ZIP ({len(data):,} bytes)")
+        return data
 
     local_offset = file_info["local_offset"]
     comp_size = file_info["comp_size"]
