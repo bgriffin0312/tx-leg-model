@@ -32,9 +32,9 @@ Methodology (Split Ticket-style):
   (lowercase, no punctuation/suffixes). Senators who previously
   served in the House carry their House WAR into career totals.
 
-Data coverage: 2018, 2022, 2024 (only cycles with candidate names).
-  2024 uses partial model (finance data not available for that cycle).
-  National env for 2024: R+3.2 (Harris 48.4% of 2-party national vote).
+Data coverage: 2018, 2020, 2022, 2024.
+  2020 and 2024 use partial model (no finance data for presidential years).
+  National env for 2024: R+3.2; for 2020: D+4.6.
 
 Output:
   data/processed/candidate_war.csv        — per-candidate career WAR
@@ -69,14 +69,18 @@ from model_config import REGRESSION_COEFFICIENTS, IE_COEFFICIENT, IE_MIN_THRESHO
 COEFS = REGRESSION_COEFFICIENTS
 COEFS["ie_coefficient"] = IE_COEFFICIENT
 
-# Time-decay weights per cycle (most recent = 1.0)
-CYCLE_WEIGHTS = {2024: 1.00, 2022: 0.60, 2018: 0.36}
+# Time-decay weights per cycle (geometric: 0.6 per cycle back from most recent)
+# 2024 = current (1.00), 2022 = 1 cycle back (0.60), 2020 = 2 back (0.36),
+# 2018 = 3 back (0.216). Adding 2020 shifts 2018 from 0.36 to 0.216 — more
+# honest decay now that more cycles are available.
+CYCLE_WEIGHTS = {2024: 1.00, 2022: 0.60, 2020: 0.36, 2018: 0.216}
 
 # National env (D-R generic ballot margin) per cycle
 # 2018: D wave, D+8.6 in the national House popular vote
+# 2020: presidential year, D+4.6 (Biden 52.3% 2p national)
 # 2022: slight R environment, R+2.8 national
 # 2024: presidential year, R+3.2 (Harris 48.4% 2p national)
-NATIONAL_ENV = {2018: 8.6, 2022: -2.8, 2024: -3.2}
+NATIONAL_ENV = {2018: 8.6, 2020: 4.6, 2022: -2.8, 2024: -3.2}
 
 # Normalise a candidate name for matching across chambers/cycles
 _STRIP = re.compile(r"[^a-z ]")
@@ -136,9 +140,21 @@ def build_incumbency_2024() -> pd.DataFrame:
     2024 incumbency = 2022 winners (plus known special-election changes).
     Returns DataFrame with columns: chamber, district, dem_incumbent, rep_incumbent.
     """
+    return _build_incumbency_from_prior(prior_year=2022)
+
+
+def build_incumbency_2020() -> pd.DataFrame:
+    """
+    2020 incumbency = 2018 winners (House: exact; Senate: imperfect because
+    half the seats were last contested in 2016, which we don't have data for).
+    """
+    return _build_incumbency_from_prior(prior_year=2018)
+
+
+def _build_incumbency_from_prior(prior_year: int) -> pd.DataFrame:
     rows = []
     for ch in ["house", "senate"]:
-        df = load_results(2022, ch)
+        df = load_results(prior_year, ch)
         for _, r in df.iterrows():
             if not r.get("on_ballot", r.get("contested", False)):
                 continue
@@ -149,13 +165,7 @@ def build_incumbency_2024() -> pd.DataFrame:
                 "dem_incumbent": wp == "D",
                 "rep_incumbent": wp == "R",
             })
-    result = pd.DataFrame(rows)
-
-    # SD-9: Kolkhorst (R) won 2022; but Taylor Rehmet (D) won 2025 special —
-    # however Rehmet's special was AFTER the 2024 general, so 2024 incumbent = R
-    # No adjustment needed for 2024.
-
-    return result
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +220,7 @@ def build_race_dataset() -> pd.DataFrame:
     all_races = []
 
     inc_2024 = build_incumbency_2024()
+    inc_2020 = build_incumbency_2020()
 
     # Phase1 dataset has correct incumbency for 2018 and 2022
     phase1 = pd.read_csv(PROC / "phase1_dataset.csv")[
@@ -218,7 +229,7 @@ def build_race_dataset() -> pd.DataFrame:
     phase1["district"] = phase1["district"].astype(int)
     phase1["chamber"]  = phase1["chamber"].str.capitalize()
 
-    for year in [2018, 2022, 2024]:
+    for year in [2018, 2020, 2022, 2024]:
         for ch in ["house", "senate"]:
             results = load_results(year, ch)
             pres    = load_pres_baseline(ch, year)
@@ -230,6 +241,12 @@ def build_race_dataset() -> pd.DataFrame:
                 inc_src = inc_2024[inc_2024["chamber"] == ch.capitalize()][
                     ["district", "dem_incumbent", "rep_incumbent"]
                 ]
+                results = results.merge(inc_src, on="district", how="left")
+            elif year == 2020:
+                inc_src = inc_2020[inc_2020["chamber"] == ch.capitalize()][
+                    ["district", "dem_incumbent", "rep_incumbent"]
+                ]
+                results = results.drop(columns=["r_incumbent", "d_incumbent"], errors="ignore")
                 results = results.merge(inc_src, on="district", how="left")
             else:
                 # Use phase1_dataset incumbency (more reliable than raw results flags for 2018)
@@ -438,6 +455,7 @@ def compute_career_war(race_war: pd.DataFrame) -> pd.DataFrame:
             "latest_district":  int(latest["district"]),
             "is_incumbent_latest": bool(latest["is_incumbent"]),
             "war_2018":         cycle_war.get(2018),
+            "war_2020":         cycle_war.get(2020),
             "war_2022":         cycle_war.get(2022),
             "war_2024":         cycle_war.get(2024),
             "chambers_served":  chambers,
@@ -538,10 +556,11 @@ HTML_TEMPLATE = """\
   <th onclick="sortTable(4)" title="Career WARP: how much this candidate shifted their party's win probability (more meaningful than WAR in safe seats)">Career WARP</th>
   <th onclick="sortTable(5)" title="Career WAR in races where both predicted and actual D% were 30-70%">Comp. WAR</th>
   <th onclick="sortTable(6)">2018</th>
-  <th onclick="sortTable(7)">2022</th>
-  <th onclick="sortTable(8)">2024</th>
-  <th onclick="sortTable(9)">Races</th>
-  <th onclick="sortTable(10)">Avg WAR</th>
+  <th onclick="sortTable(7)">2020</th>
+  <th onclick="sortTable(8)">2022</th>
+  <th onclick="sortTable(9)">2024</th>
+  <th onclick="sortTable(10)">Races</th>
+  <th onclick="sortTable(11)">Avg WAR</th>
 </tr>
 </thead>
 <tbody id="tbody"></tbody>
@@ -597,6 +616,7 @@ function renderRow(r) {{
     <td data-val="${{r.career_warp}}">${{fmt(r.career_warp)}}</td>
     <td data-val="${{r.career_war_comp ?? -999}}">${{compWar}}</td>
     <td data-val="${{r.war_2018 ?? -999}}">${{fmt(r.war_2018)}}</td>
+    <td data-val="${{r.war_2020 ?? -999}}">${{fmt(r.war_2020)}}</td>
     <td data-val="${{r.war_2022 ?? -999}}">${{fmt(r.war_2022)}}</td>
     <td data-val="${{r.war_2024 ?? -999}}">${{fmt(r.war_2024)}}</td>
     <td>${{r.n_races}}</td>
@@ -629,7 +649,7 @@ function applyFilters() {{
 
   filtered.sort((a, b) => {{
     const fields = ["candidate","party","latest_chamber","career_war","career_warp",
-                    "career_war_comp","war_2018","war_2022","war_2024","n_races","avg_war"];
+                    "career_war_comp","war_2018","war_2020","war_2022","war_2024","n_races","avg_war"];
     let va = a[fields[sortCol]] ?? -999;
     let vb = b[fields[sortCol]] ?? -999;
     if (va < vb) return sortAsc ? -1 : 1;
@@ -683,14 +703,14 @@ def main():
         seat = f"{'HD' if r['latest_chamber']=='House' else 'SD'}-{r['latest_district']:03d}"
         print(f"    {r['candidate']:<28s} ({r['party']}) {seat}  "
               f"Career: {r['career_war']:+.1f}  "
-              f"[{r['war_2018'] or '—':>5}  {r['war_2022'] or '—':>5}  {r['war_2024'] or '—':>5}]")
+              f"[{r['war_2018'] or '—':>5}  {r['war_2020'] or '—':>5}  {r['war_2022'] or '—':>5}  {r['war_2024'] or '—':>5}]")
 
     print("\n  Bottom 10 by Career WAR:")
     for _, r in career.tail(10).iloc[::-1].iterrows():
         seat = f"{'HD' if r['latest_chamber']=='House' else 'SD'}-{r['latest_district']:03d}"
         print(f"    {r['candidate']:<28s} ({r['party']}) {seat}  "
               f"Career: {r['career_war']:+.1f}  "
-              f"[{r['war_2018'] or '—':>5}  {r['war_2022'] or '—':>5}  {r['war_2024'] or '—':>5}]")
+              f"[{r['war_2018'] or '—':>5}  {r['war_2020'] or '—':>5}  {r['war_2022'] or '—':>5}  {r['war_2024'] or '—':>5}]")
 
     # Build HTML
     records = career.to_dict("records")

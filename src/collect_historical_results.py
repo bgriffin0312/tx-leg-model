@@ -46,12 +46,14 @@ DATA_HIST.mkdir(parents=True, exist_ok=True)
 WIKI_PAGES = {
     # All titles verified via Wikipedia API search (note: singular "election")
     ("house", 2022): "2022 Texas House of Representatives election",
+    ("house", 2020): "2020 Texas House of Representatives election",
     ("house", 2018): "2018 Texas House of Representatives election",
     ("house", 2014): "2014 Texas House of Representatives election",
     ("house", 2010): "2010 Texas House of Representatives election",
     ("house", 2006): "2006 Texas House of Representatives election",
     ("house", 2002): "2002 Texas House of Representatives election",
     ("senate", 2022): "2022 Texas Senate election",
+    ("senate", 2020): "2020 Texas Senate election",
     ("senate", 2018): "2018 Texas Senate election",
     ("senate", 2014): "2014 Texas Senate election",
     ("senate", 2010): "2010 Texas Senate election",
@@ -693,7 +695,7 @@ def summarize(rows: list[dict], label: str):
 # Main
 # ---------------------------------------------------------------------------
 
-YEARS = [2002, 2006, 2010, 2014, 2018, 2022]
+YEARS = [2002, 2006, 2010, 2014, 2018, 2020, 2022]
 CHAMBERS = ["house", "senate"]
 
 
