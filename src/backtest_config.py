@@ -182,10 +182,9 @@ BACKTEST_CONFIGS: dict[int, dict] = {
 
         "use_finance": False,
 
-        # 2018 Senate: only odd-numbered districts were on the ballot (class 1/3 seats)
-        # Districts: 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31 (approx)
-        # Note: confirm with actual 2018 Senate ballot schedule
-        "senate_districts_on_ballot": {1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31},
+        # 2018 Senate: 15 districts on ballot (from tx_senate_results_2018.csv on_ballot flag)
+        # Not a simple odd/even split — TX Senate classes don't follow that pattern
+        "senate_districts_on_ballot": {2, 3, 5, 7, 8, 9, 10, 14, 15, 16, 17, 23, 25, 30, 31},
 
         # TX-specific Hispanic adjustment (same coefficient; pre-2020 realignment
         # may mean the actual gap was smaller in 2018, but no TX-specific validated
