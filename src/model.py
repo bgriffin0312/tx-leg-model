@@ -347,11 +347,23 @@ def build_linear_predictions(df: pd.DataFrame,
     #       hasn't filed their semi-annual yet), not a real "raised nothing"
     #       finding. Without this, a real candidate eats a ±3.1pp penalty for
     #       an opponent's filing delay.
+    #
+    # IMPORTANT: case (b) only applies when there's a party-of-seat anchor
+    # (incumbent_party in {D, R}). For vacant seats, collect_finance_2026.py
+    # stores inc_raised=0 by convention and chal_raised=max(r_total, d_total),
+    # so inc_raised==0 there is structural, not a missed filing — the
+    # dem_fundraising_share column carries the real partisan direction and
+    # should be respected.
     inc_raised = pd.to_numeric(df.get("incumbent_raised", 0), errors="coerce").fillna(0)
     chal_raised = pd.to_numeric(df.get("challenger_raised", 0), errors="coerce").fillna(0)
     total_raised = inc_raised + chal_raised
+    has_party_anchor = df["incumbent_party"].isin(["D", "R"])
     low_total_mask = total_raised < 10_000
-    one_sided_mask = ((inc_raised == 0) | (chal_raised == 0)) & (total_raised > 0)
+    one_sided_mask = (
+        ((inc_raised == 0) | (chal_raised == 0))
+        & (total_raised > 0)
+        & has_party_anchor
+    )
     nullify_mask = low_total_mask | one_sided_mask
     n_low = (low_total_mask & fundraising_share.notna()).sum()
     n_one_sided = (one_sided_mask & fundraising_share.notna()).sum()
