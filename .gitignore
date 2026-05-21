@@ -6,7 +6,9 @@
 # Data
 data/raw/
 data/processed/
-output/
+# Ignore everything in output/ EXCEPT rendered HTML charts (for GitHub Pages embeds)
+output/*
+!output/*.html
 
 # Python
 __pycache__/
