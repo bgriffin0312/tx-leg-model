@@ -340,18 +340,26 @@ def build_linear_predictions(df: pd.DataFrame,
         df.get("dem_fundraising_share", pd.Series(np.nan, index=df.index)),
         errors="coerce"
     )
-    # Nullify dem_fundraising_share when total raised is below $10K —
-    # one-sided filings produce 0.0 or 1.0 that are noise, not signal
+    # Nullify dem_fundraising_share in two cases where 0.0/1.0 is noise, not signal:
+    #   (a) total raised < $10K — both sides essentially absent
+    #   (b) one side raised real money but the other reports exactly $0 — almost
+    #       always a paperwork-timing artifact pre-July (challenger or incumbent
+    #       hasn't filed their semi-annual yet), not a real "raised nothing"
+    #       finding. Without this, a real candidate eats a ±3.1pp penalty for
+    #       an opponent's filing delay.
     inc_raised = pd.to_numeric(df.get("incumbent_raised", 0), errors="coerce").fillna(0)
     chal_raised = pd.to_numeric(df.get("challenger_raised", 0), errors="coerce").fillna(0)
     total_raised = inc_raised + chal_raised
     low_total_mask = total_raised < 10_000
-    n_nullified = (low_total_mask & fundraising_share.notna()).sum()
-    fundraising_share[low_total_mask] = np.nan
+    one_sided_mask = ((inc_raised == 0) | (chal_raised == 0)) & (total_raised > 0)
+    nullify_mask = low_total_mask | one_sided_mask
+    n_low = (low_total_mask & fundraising_share.notna()).sum()
+    n_one_sided = (one_sided_mask & fundraising_share.notna()).sum()
+    fundraising_share[nullify_mask] = np.nan
     fundraising_share = fundraising_share.fillna(0.5)
-    if n_nullified > 0:
-        print(f"  dem_fundraising_share nullified for {n_nullified} districts "
-              f"below $10K total raised threshold")
+    if n_low or n_one_sided:
+        print(f"  dem_fundraising_share nullified: {n_low} below $10K total, "
+              f"{n_one_sided} one-sided (only one side filed)")
 
     chamber_senate = (df["chamber_lower"] == "senate").astype(int)
 

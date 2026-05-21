@@ -622,7 +622,7 @@ function applyFilters() {{
     if (chamberF && r.chamber !== chamberF) return false;
     if (partyF   && r.cur_party !== partyF) return false;
     if (search && !(r.dist_label + " " + r.r_candidate + " " + r.d_candidate).toLowerCase().includes(search)) return false;
-    if (quickMode === 'comp' && (r.flip_pct === null || r.flip_pct < 20 || r.flip_pct > 80)) return false;
+    if (quickMode === 'comp' && (r.flip_pct === null || r.flip_pct < 20)) return false;
     if (quickMode === 'flip' && (r.flip_pct === null || r.flip_pct < 55)) return false;
     return true;
   }});
