@@ -6,9 +6,11 @@
 # Data
 data/raw/
 data/processed/
-# Ignore everything in output/ EXCEPT rendered HTML charts (for GitHub Pages embeds)
+# Ignore everything in output/ EXCEPT rendered HTML charts and the Flourish
+# data CSV (both published via GitHub Pages for embeds / live data)
 output/*
 !output/*.html
+!output/competitive_races.csv
 
 # Python
 __pycache__/
