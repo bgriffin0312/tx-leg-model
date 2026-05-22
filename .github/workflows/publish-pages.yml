@@ -3,7 +3,9 @@ name: Deploy charts to GitHub Pages
 on:
   push:
     branches: [master]
-    paths: ['output/**/*.html']
+    paths:
+      - 'output/**/*.html'
+      - 'output/**/*.csv'
   workflow_dispatch:
 
 permissions:

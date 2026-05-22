@@ -1,8 +1,8 @@
 """
-Build a clean Datawrapper-ready CSV of competitive 2026 TX legislative
-races at the current environment (D win prob in [25%, 75%]).
+Build a clean CSV of competitive 2026 TX legislative races at the current
+environment (D win prob in [25%, 75%]) for upload to Flourish.
 
-Output: output/competitive_races_datawrapper.csv
+Output: output/competitive_races.csv
 
 Run after `python src/model.py` so model_2026_scenarios.csv is fresh.
 """
@@ -83,7 +83,7 @@ def main() -> None:
 
     rows.sort(key=lambda x: x["D win prob %"], reverse=True)
     out_df = pd.DataFrame(rows)
-    out_path = OUTPUT / "competitive_races_datawrapper.csv"
+    out_path = OUTPUT / "competitive_races.csv"
     out_df.to_csv(out_path, index=False, encoding="utf-8")
     print(f"  Scenario: {target_label} (current env)")
     print(f"  Competitive rows: {len(out_df)}")
