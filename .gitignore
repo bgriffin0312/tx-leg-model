@@ -10,7 +10,9 @@ data/processed/
 # data CSV (both published via GitHub Pages for embeds / live data)
 output/*
 !output/*.html
-!output/competitive_races.csv
+!output/competitive_house.csv
+!output/competitive_senate.csv
+!output/war_top10_2026.csv
 
 # Python
 __pycache__/

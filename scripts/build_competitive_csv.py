@@ -1,8 +1,16 @@
 """
-Build a clean CSV of competitive 2026 TX legislative races at the current
-environment (D win prob in [25%, 75%]) for upload to Flourish.
+Build clean CSVs of competitive 2026 TX legislative races at the current
+environment for upload to Flourish.
 
-Output: output/competitive_races.csv
+Output:
+  output/competitive_house.csv
+  output/competitive_senate.csv
+
+Columns mirror src/build_table.py (the flip-prob HTML table):
+  District | Current Party | R Candidate | D Candidate | Flip Prob | Rating
+
+Flip prob = P(seat changes party from current holder).
+Filter:   0.25 <= flip_prob <= 0.75 (the actually-competitive band).
 
 Run after `python src/model.py` so model_2026_scenarios.csv is fresh.
 """
@@ -27,12 +35,19 @@ def _env_label(env_dial: float) -> str:
     return f"{s}+{abs(env_dial):.0f}"
 
 
+def rating(flip_prob: float) -> str:
+    if flip_prob >= 0.75: return "Likely flip"
+    if flip_prob >= 0.55: return "Lean flip"
+    if flip_prob >= 0.40: return "Competitive"
+    if flip_prob >= 0.20: return "Likely holds"
+    return "Safe"
+
+
 def main() -> None:
     current_env = round((GENERIC_BALLOT_TOPLINE_D_2P - 0.5) * 200, 1)
     target_label = _env_label(current_env)
 
     scenarios = pd.read_csv(OUTPUT / "model_2026_scenarios.csv")
-    # Pick the scenario whose label matches current env; fall back to closest env_dial
     if target_label in set(scenarios["scenario"]):
         df = scenarios[scenarios["scenario"] == target_label].copy()
     else:
@@ -43,53 +58,48 @@ def main() -> None:
 
     cand = load_candidate_lookup()
 
-    # Pull open_seat flag from districts_2026.csv (not in scenarios CSV)
-    dists = pd.read_csv(ROOT / "data" / "processed" / "districts_2026.csv")
-    open_lookup = {
-        (str(r["chamber"]).strip(), int(r["district"])):
-            str(r.get("open_seat", "")).strip().lower() in ("true", "1", "yes")
-        for _, r in dists.iterrows()
-    }
-
-    rows = []
+    rows_by_chamber: dict[str, list[dict]] = {"House": [], "Senate": []}
     for _, r in df.iterrows():
-        wp = float(r["win_prob_d"])
-        if not (LOW <= wp <= HIGH):
-            continue
+        wp_d = float(r["win_prob_d"])
         chamber = str(r["chamber"]).strip()
         district = int(r["district"])
+        inc_party = str(r["incumbent_party"]).strip().upper()
+
+        if inc_party == "R":
+            flip_prob = wp_d
+        elif inc_party == "D":
+            flip_prob = 1 - wp_d
+        else:
+            continue  # no current holder → no flip prob
+
+        if not (LOW <= flip_prob <= HIGH):
+            continue
+
         info = cand.get((chamber, district), {})
         d_name = info.get("d") or "TBD"
         r_name = info.get("r") or "TBD"
-        inc_party = str(r["incumbent_party"]).strip().upper()
-        is_open = open_lookup.get((chamber, district), False)
-        if is_open:
-            status = "Open seat"
-        elif inc_party == "D":
-            status = "D incumbent"
-        elif inc_party == "R":
-            status = "R incumbent"
-        else:
-            status = "Open seat"
-        pres = float(r["dem_pres_2p_baseline"]) * 100 if pd.notna(r["dem_pres_2p_baseline"]) else None
-        rows.append({
+
+        rows_by_chamber[chamber].append({
             "District":      f"{'HD' if chamber == 'House' else 'SD'} {district}",
-            "Status":        status,
-            "D candidate":   d_name,
-            "R candidate":   r_name,
-            "Harris 2024 %": round(pres, 1) if pres is not None else "",
-            "D win prob %":  round(wp * 100, 1),
+            "Current Party": inc_party,
+            "R Candidate":   r_name,
+            "D Candidate":   d_name,
+            "Flip Prob":     round(flip_prob * 100, 1),
+            "Rating":        rating(flip_prob),
         })
 
-    rows.sort(key=lambda x: x["D win prob %"], reverse=True)
-    out_df = pd.DataFrame(rows)
-    out_path = OUTPUT / "competitive_races.csv"
-    out_df.to_csv(out_path, index=False, encoding="utf-8")
     print(f"  Scenario: {target_label} (current env)")
-    print(f"  Competitive rows: {len(out_df)}")
-    print(f"  Wrote {out_path.relative_to(ROOT)}")
-    print()
-    print(out_df.to_string(index=False))
+    for chamber, rows in rows_by_chamber.items():
+        rows.sort(key=lambda x: x["Flip Prob"], reverse=True)
+        out_df = pd.DataFrame(rows)
+        suffix = chamber.lower()
+        out_path = OUTPUT / f"competitive_{suffix}.csv"
+        out_df.to_csv(out_path, index=False, encoding="utf-8")
+        print(f"  {chamber}: {len(out_df)} rows  →  {out_path.relative_to(ROOT)}")
+        if len(out_df):
+            print()
+            print(out_df.to_string(index=False))
+            print()
 
 
 if __name__ == "__main__":
