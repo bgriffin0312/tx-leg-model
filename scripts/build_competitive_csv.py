@@ -27,7 +27,10 @@ from build_competitive_map import load_candidate_lookup
 from model_config import GENERIC_BALLOT_TOPLINE_D_2P
 
 OUTPUT = ROOT / "output"
-LOW, HIGH = 0.25, 0.75
+# Matches the flip table's "Competitive" pill threshold: any race rated
+# Likely holds or better. No upper bound — a high-flip-prob seat like SD 9
+# (D-held, model puts R at ~84% to flip) is still very much a contested race.
+MIN_FLIP = 0.20
 
 
 def _env_label(env_dial: float) -> str:
@@ -72,7 +75,7 @@ def main() -> None:
         else:
             continue  # no current holder → no flip prob
 
-        if not (LOW <= flip_prob <= HIGH):
+        if flip_prob < MIN_FLIP:
             continue
 
         info = cand.get((chamber, district), {})
