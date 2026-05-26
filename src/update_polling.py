@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 USER_AGENT = "TXLegislativeModel/1.0 (academic research)"
 
 # Aggregation parameters
-WINDOW_DAYS = 45          # only polls within this many days
+WINDOW_DAYS = 30          # only polls within this many days
 RECENCY_BOOST_DAYS = 14   # polls within this many days get 2x weight
 RASMUSSEN_EXCLUDE_RACIAL = True  # exclude Rasmussen racial subgroups
 
