@@ -150,13 +150,10 @@ def parse_date_from_label(label: str) -> date:
 # Known recent PDF URLs (most recent first).
 # Update this list when new polls are published.
 YOUGOV_PDFS = [
-    # 2026-04-03_to_06 dropped 2026-05-19 — superseded by newer polls in the 3-poll
-    # racial aggregate (Fox 4/20, WaPo 4/28, NYT/Siena 5/15). Re-add once a newer
-    # YouGov crosstab releases.
-    ("2026-03-27_to_30", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_3wplfYX.pdf"),
-    ("2026-03-20_to_23", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_o84FoNw.pdf"),
-    ("2026-03-13_to_16", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_CwWXhS2.pdf"),
-    ("2026-03-06_to_09", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_EcCnfRV.pdf"),
+    # Most-recent-first; older entries pruned once they fall outside the 45-day
+    # aggregation window. Refreshed 2026-05-26 (DDHQ-listed May polls).
+    ("2026-05-15_to_18", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_YTE4G2g.pdf"),
+    ("2026-05-01_to_04", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_i4K4elJ.pdf"),
 ]
 
 
