@@ -36,27 +36,27 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4509,
+    "white_nh": 0.4507,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8894,
+    "black_nh": 0.8862,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.6398,
+    "hispanic": 0.6579,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.5295,
+    "other": 0.5270,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "Multi-source 5-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_SOURCE = "Multi-source 4-poll racial avg + 0 topline-only"
 GENERIC_BALLOT_UPDATED = "2026-05-26"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5413  # D+5.0pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5432  # D+5.0pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)

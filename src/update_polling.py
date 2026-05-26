@@ -150,10 +150,10 @@ def parse_date_from_label(label: str) -> date:
 # Known recent PDF URLs (most recent first).
 # Update this list when new polls are published.
 YOUGOV_PDFS = [
-    # Most-recent-first; older entries pruned once they fall outside the 45-day
-    # aggregation window. Refreshed 2026-05-26 (DDHQ-listed May polls).
+    # Keep ONE YouGov per aggregation run — including two back-to-back weeklies
+    # double-counts the pollster's house effect. Use the most recent in-window
+    # fielding and drop older ones once a fresher poll is available.
     ("2026-05-15_to_18", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_YTE4G2g.pdf"),
-    ("2026-05-01_to_04", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_i4K4elJ.pdf"),
 ]
 
 
