@@ -13,6 +13,9 @@ output/*
 !output/competitive_house.csv
 !output/competitive_senate.csv
 !output/war_top10_2026.csv
+!output/competitive_house_postrunoff.csv
+!output/competitive_senate_postrunoff.csv
+!output/war_top10_2026_postrunoff.csv
 
 # Python
 __pycache__/
