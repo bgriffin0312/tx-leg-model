@@ -31,10 +31,10 @@ Write-Host "[6/7] Building Flourish CSV..." -ForegroundColor Cyan
 python scripts/build_competitive_csv.py | Select-Object -Last 2
 
 Write-Host "[7/7] Committing + pushing outputs..." -ForegroundColor Cyan
-git add output/*.html output/competitive_races.csv
+git add output/*.html output/competitive_house.csv output/competitive_senate.csv output/war_top10_2026.csv
 $staged = git diff --cached --name-only
 if (-not $staged) {
-    Write-Host "  Nothing changed in output/ — skipping commit." -ForegroundColor Yellow
+    Write-Host "  Nothing changed in output/ - skipping commit." -ForegroundColor Yellow
 } else {
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
     git commit -m "Publish charts $stamp"
@@ -42,5 +42,6 @@ if (-not $staged) {
     Write-Host ""
     Write-Host "Done. Charts will be live in ~30 seconds at:" -ForegroundColor Green
     Write-Host "  https://bgriffin0312.github.io/tx-leg-model/" -ForegroundColor Green
-    Write-Host "  https://bgriffin0312.github.io/tx-leg-model/competitive_races.csv  (Flourish live data URL)" -ForegroundColor Green
+    Write-Host "  https://bgriffin0312.github.io/tx-leg-model/competitive_house.csv  (Flourish live data URL)" -ForegroundColor Green
+    Write-Host "  https://bgriffin0312.github.io/tx-leg-model/competitive_senate.csv (Flourish live data URL)" -ForegroundColor Green
 }
