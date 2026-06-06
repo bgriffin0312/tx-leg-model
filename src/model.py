@@ -340,13 +340,17 @@ def build_linear_predictions(df: pd.DataFrame,
         df.get("dem_fundraising_share", pd.Series(np.nan, index=df.index)),
         errors="coerce"
     )
-    # Nullify dem_fundraising_share in two cases where 0.0/1.0 is noise, not signal:
+    # Nullify dem_fundraising_share in two cases where the share is noise, not signal:
     #   (a) total raised < $10K — both sides essentially absent
-    #   (b) one side raised real money but the other reports exactly $0 — almost
+    #   (b) one side raised real money but the OTHER side is below $10K — almost
     #       always a paperwork-timing artifact pre-July (challenger or incumbent
-    #       hasn't filed their semi-annual yet), not a real "raised nothing"
-    #       finding. Without this, a real candidate eats a ±3.1pp penalty for
-    #       an opponent's filing delay.
+    #       hasn't filed their semi-annual yet) or a thin/partial early filing,
+    #       not a real "raised nothing" finding. Without this, a real candidate
+    #       eats a multi-point penalty for an opponent's filing delay. A sub-$10K
+    #       side carries no reliable partisan-funding signal, so the share it
+    #       implies (near 0.0 or 1.0) is dropped to neutral. (Widened from the
+    #       old exactly-$0 test on 2026-06-06 per Brennan: e.g. HD126, where the
+    #       D nominee's ~$1K filing was dragging the seat 16pp on noise.)
     #
     # IMPORTANT: case (b) only applies when there's a party-of-seat anchor
     # (incumbent_party in {D, R}). For vacant seats, collect_finance_2026.py
@@ -354,24 +358,25 @@ def build_linear_predictions(df: pd.DataFrame,
     # so inc_raised==0 there is structural, not a missed filing — the
     # dem_fundraising_share column carries the real partisan direction and
     # should be respected.
+    _MIN_SIDE_FOR_SHARE = 10_000  # a side below this carries no reliable signal
     inc_raised = pd.to_numeric(df.get("incumbent_raised", 0), errors="coerce").fillna(0)
     chal_raised = pd.to_numeric(df.get("challenger_raised", 0), errors="coerce").fillna(0)
     total_raised = inc_raised + chal_raised
     has_party_anchor = df["incumbent_party"].isin(["D", "R"])
     low_total_mask = total_raised < 10_000
-    one_sided_mask = (
-        ((inc_raised == 0) | (chal_raised == 0))
-        & (total_raised > 0)
+    lopsided_mask = (
+        ((inc_raised < _MIN_SIDE_FOR_SHARE) | (chal_raised < _MIN_SIDE_FOR_SHARE))
+        & ~low_total_mask  # already covered by (a); count each district once
         & has_party_anchor
     )
-    nullify_mask = low_total_mask | one_sided_mask
+    nullify_mask = low_total_mask | lopsided_mask
     n_low = (low_total_mask & fundraising_share.notna()).sum()
-    n_one_sided = (one_sided_mask & fundraising_share.notna()).sum()
+    n_lopsided = (lopsided_mask & fundraising_share.notna()).sum()
     fundraising_share[nullify_mask] = np.nan
     fundraising_share = fundraising_share.fillna(0.5)
-    if n_low or n_one_sided:
+    if n_low or n_lopsided:
         print(f"  dem_fundraising_share nullified: {n_low} below $10K total, "
-              f"{n_one_sided} one-sided (only one side filed)")
+              f"{n_lopsided} lopsided (one side below $10K)")
 
     chamber_senate = (df["chamber_lower"] == "senate").astype(int)
 

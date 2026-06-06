@@ -36,27 +36,27 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4507,
+    "white_nh": 0.4450,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8862,
+    "black_nh": 0.8499,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.6579,
+    "hispanic": 0.6461,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.5270,
+    "other": 0.5125,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "Multi-source 4-poll racial avg + 0 topline-only"
-GENERIC_BALLOT_UPDATED = "2026-05-26"  # ISO date
+GENERIC_BALLOT_SOURCE = "Multi-source 7-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_UPDATED = "2026-06-06"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5432  # D+5.0pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5318  # D+5.0pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)
@@ -161,8 +161,8 @@ IE_DATA_THROUGH:  str   = "2026-04-06"  # update when re-running collect_ies_202
 # ---------------------------------------------------------------------------
 # Finance data currency
 # ---------------------------------------------------------------------------
-FINANCE_DATA_THROUGH = "2026-03-31"  # last TEC filing deadline captured
-FINANCE_CUTOFF_POSTPRIMARY = "20260430"  # April 30 cutoff for early-cycle flag
+FINANCE_DATA_THROUGH = "2026-05-16"  # last TEC filing deadline captured (runoff 8-day reports)
+FINANCE_CUTOFF_POSTPRIMARY = "20260606"  # include all reports filed through today (captures May 26 runoff reports); still pre-July semi-annual
 
 # ---------------------------------------------------------------------------
 # Auto-select national_env coefficient based on finance data currency

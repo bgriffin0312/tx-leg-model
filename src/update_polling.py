@@ -131,12 +131,22 @@ def download_pdf(label: str, url: str, subdir: str = "", force: bool = False) ->
 
 
 def parse_date_from_label(label: str) -> date:
-    """Parse a date label like '2026-03-27_to_30' into a date (uses end date)."""
-    # Try YYYY-MM-DD_to_DD format
+    """Parse a date label into a date (uses the END of the fielding range).
+
+    Handles three forms:
+      '2026-03-27_to_30'      same-month range  -> end day 30
+      '2026-05-29_to_06-01'   cross-month range -> end month-day 06-01
+      '2026-06-01'            plain ISO date
+    """
+    # Cross-month: YYYY-MM-DD_to_MM-DD (check first — more specific)
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})_to_(\d{2})-(\d{2})", label)
+    if m:
+        return date(int(m.group(1)), int(m.group(4)), int(m.group(5)))
+    # Same-month: YYYY-MM-DD_to_DD
     m = re.match(r"(\d{4})-(\d{2})-(\d{2})_to_(\d{2})", label)
     if m:
         return date(int(m.group(1)), int(m.group(2)), int(m.group(4)))
-    # Try ISO date
+    # Plain ISO date
     try:
         return date.fromisoformat(label)
     except ValueError:
@@ -153,7 +163,7 @@ YOUGOV_PDFS = [
     # Keep ONE YouGov per aggregation run — including two back-to-back weeklies
     # double-counts the pollster's house effect. Use the most recent in-window
     # fielding and drop older ones once a fresher poll is available.
-    ("2026-05-15_to_18", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_YTE4G2g.pdf"),
+    ("2026-05-29_to_06-01", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_AvLU7vY.pdf"),
 ]
 
 

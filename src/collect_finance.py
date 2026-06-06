@@ -241,10 +241,17 @@ def _tec_zip_central_dir(url: str) -> dict | None:
     Returns dict of {filename: {local_offset, comp_size, uncomp_size, compression}}.
     Falls back to downloading the full ZIP if HEAD or range requests look broken.
     """
-    # Step 1: get file size
+    # Step 1: get file size.
+    # TEC's public URL now 301-redirects to a CloudFront host. requests.head()
+    # does NOT follow redirects by default, so without allow_redirects=True we
+    # see the 134-byte redirect stub and wrongly fall back to a (possibly stale)
+    # local ZIP. CloudFront honors byte-range requests, and requests.get()
+    # follows redirects while preserving the Range header, so the range path
+    # below works against the original url once we know the true size.
     file_size = None
     try:
-        r = requests.head(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+        r = requests.head(url, headers={"User-Agent": USER_AGENT},
+                          timeout=30, allow_redirects=True)
         file_size = int(r.headers["Content-Length"])
     except Exception as exc:
         print(f"  TEC HEAD failed: {exc}")
