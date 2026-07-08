@@ -1,0 +1,23 @@
+# Phase C (GerryChain ensemble) dependencies.
+#
+# Why a separate requirements file / separate venv: the main project runs on
+# Python 3.14 (very new), but gerrychain pins an old numpy with no 3.14 wheel
+# and this machine has no C compiler to build numpy from source. Phase C
+# therefore runs in a dedicated Python 3.12 venv:
+#
+#   uv venv --python 3.12 .venv-ensemble
+#   uv pip install --python .venv-ensemble -r requirements-ensemble.txt
+#   .venv-ensemble\Scripts\python.exe ensemble\build_graph.py
+#
+# Phases A and B (metrics.py, drift.py and their drivers) run fine on the
+# main project's existing Python 3.14 environment and do NOT need this venv.
+
+gerrychain
+maup
+geopandas
+networkx
+scipy
+pandas
+numpy
+matplotlib
+openpyxl
