@@ -716,6 +716,18 @@ def print_district_table(df: pd.DataFrame, result: dict, chamber: str):
                   f"{wp*100:6.1f}%  {rating:12s}")
 
 
+def _scenario_slug(env_dial: float) -> str:
+    """
+    Short scenario label for CSV output. Uses one decimal when needed so a
+    non-integer current environment (D+5.4) stays DISTINCT from a fixed
+    integer scenario (D+5) — downstream builders pivot on this column, and
+    duplicate labels produce duplicate columns (build_maps crashed on this).
+    """
+    mag = abs(env_dial)
+    s = f"{mag:.0f}" if float(mag).is_integer() else f"{mag:.1f}"
+    return f"D+{s}" if env_dial >= 0 else f"R+{s}"
+
+
 def save_scenario_output(results_by_scenario: dict, df: pd.DataFrame):
     """Write per-district results to output/model_2026_scenarios.csv"""
     rows = []
@@ -724,7 +736,7 @@ def save_scenario_output(results_by_scenario: dict, df: pd.DataFrame):
         for idx, row in df.iterrows():
             rows.append({
                 "env_dial": env_dial,
-                "scenario": f"D+{env_dial:.0f}" if env_dial >= 0 else f"R+{-env_dial:.0f}",
+                "scenario": _scenario_slug(env_dial),
                 "chamber": row["chamber"],
                 "district": row["district"],
                 "incumbent": row["incumbent"],
@@ -747,7 +759,7 @@ def save_scenario_output(results_by_scenario: dict, df: pd.DataFrame):
         sd = result["senate_seat_dist"]
         summary_rows.append({
             "env_dial": env_dial,
-            "scenario": f"D+{env_dial:.0f}" if env_dial >= 0 else f"R+{-env_dial:.0f}",
+            "scenario": _scenario_slug(env_dial),
             "expected_house_seats": round(result["expected_house_seats"], 1),
             "house_seats_p10": int(np.percentile(hd, 10)),
             "house_seats_p25": int(np.percentile(hd, 25)),
