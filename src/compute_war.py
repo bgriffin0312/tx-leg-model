@@ -87,13 +87,26 @@ _STRIP = re.compile(r"[^a-z ]")
 _SUFFIXES = re.compile(r"\b(jr|sr|ii|iii|iv|the honorable|hon)\b\.?", re.I)
 
 
+# Canonical identities for candidates whose ballot name changed across cycles
+# (marriage, preferred-name change). Keys and values are normalize_name()
+# output (post-hyphen/suffix stripping); applied inside normalize_name so a
+# candidate's races aggregate under one identity — the one that matches their
+# current name in districts_2026.csv.
+NAME_CANONICAL = {
+    "christian hayes": "christian manuel",        # HD22 — ran 2022 as Hayes
+    "caroline harris": "caroline harris davila",  # HD52 — ran 2022 as Harris
+}
+
+
 def normalize_name(name) -> str:
     if not isinstance(name, str) or not name.strip() or name.strip().lower() in ("nan", "none", "n/a", "—"):
         return ""
     n = name.lower()
+    n = n.replace("-", " ")  # hyphenated surnames match their spaced form
     n = _SUFFIXES.sub("", n)
     n = _STRIP.sub("", n)
-    return " ".join(n.split())
+    n = " ".join(n.split())
+    return NAME_CANONICAL.get(n, n)
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +359,7 @@ def compute_race_war(df: pd.DataFrame) -> pd.DataFrame:
     # This is larger than SIGMA_FULL_MODEL because the WAR baseline
     # excludes finance terms (challenger_viability_flag, dem_fundraising_share)
     SIGMA_WAR_BASELINE = float(np.sqrt((df["raw_war"]**2).mean()))
-    print(f"  Full model sigma=0.0785, WAR baseline sigma={SIGMA_WAR_BASELINE:.4f}")
+    print(f"  Full model sigma={SIGMA_FULL_MODEL}, WAR baseline sigma={SIGMA_WAR_BASELINE:.4f}")
 
     # Build long-form table: one row per candidate per race
     rows = []

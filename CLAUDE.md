@@ -56,10 +56,9 @@ Districts: 1, 2, 3, 4, 5, 9, 11, 13, 18, 19, 21, 22, 24, 26, 28, 31
 - SD9: Taylor Rehmet (D) won special election in 2025, replacing Republican Kelly Hancock
 
 ### Data quality notes
-- 18 House districts have blank R candidate names (wikilink formatting issue) — pcts are correct; names can be backfilled from `tx_house_members_89th.csv`
-- 5 House districts have blank D candidate names — same issue
+- ~~Blank candidate names in results CSVs~~ — FIXED 2026-07-20: the wikilink parser in `collect_2024_results.py` / `collect_historical_results.py` mangled piped wikilinks (`[[Article|Display]]`), blanking names and "(incumbent)" flags. Both parsers fixed and all 2018–2024 files regenerated from cached XMLs.
+- `data/raw/historical/tx_house_results_2020.csv` is **Ballotpedia-built, not wiki-parseable** — the collector now refuses to overwrite it with an empty parse (guard added 2026-07-20). Don't regenerate it from XML.
 - SD13 (2022) has no result parsed — needs manual lookup
-- SD1, SD3, SD28 (2022) have blank incumbent names but correct pcts
 
 ### Source scripts — `src/`
 | Script | Purpose |

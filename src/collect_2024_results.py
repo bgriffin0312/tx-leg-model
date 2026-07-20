@@ -73,6 +73,11 @@ def parse_election_box(block: str) -> list[dict]:
     # Split on each candidate entry template (winning or non-winning)
     parts = re.split(r'\{\{Election box (?:winning )?candidate[^\}]*?(?=\||\}\})', block)
     for part in parts[1:]:
+        # Resolve wikilinks BEFORE pipe normalization: the pipe inside
+        # [[Article|Display]] would otherwise be turned into a field break,
+        # truncating the candidate capture and blanking the name.
+        part = re.sub(r'\[\[[^\]|]*\|([^\]]+)\]\]', r'\1', part)  # [[A|B]] -> B
+        part = re.sub(r'\[\[([^\]]+)\]\]', r'\1', part)           # [[A]] -> A
         # Normalize: inline pipes become newlines for uniform parsing
         part_norm = part.replace("|", "\n|")
         party_m = re.search(r'\|\s*party\s*=\s*([^\n|]+)', part_norm)

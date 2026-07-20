@@ -184,6 +184,11 @@ def parse_election_box(block: str) -> list[dict]:
     )
 
     for part in parts[1:]:
+        # Resolve wikilinks BEFORE pipe normalization: the pipe inside
+        # [[Article|Display]] would otherwise be turned into a field break,
+        # truncating the candidate capture and blanking the name.
+        part = re.sub(r'\[\[[^\]|]*\|([^\]]+)\]\]', r'\1', part)  # [[A|B]] -> B
+        part = re.sub(r'\[\[([^\]]+)\]\]', r'\1', part)           # [[A]] -> A
         part_norm = part.replace("|", "\n|")
 
         party_m = re.search(r'\|\s*party\s*=\s*([^\n|}\[]+)', part_norm)
@@ -710,6 +715,16 @@ def main(years=None, chambers=None):
                 rows = collect(chamber, year)
                 if rows:
                     out = DATA_HIST / f"tx_{chamber}_results_{year}.csv"
+                    # Safety: never clobber a hand-curated file with an empty
+                    # parse. The 2020 House page isn't parseable from the wiki
+                    # XML — that CSV was built from Ballotpedia and a re-run
+                    # here would wipe every candidate name (happened 2026-07-20).
+                    any_names = any(r.get("r_candidate") or r.get("d_candidate")
+                                    for r in rows)
+                    if not any_names and out.exists():
+                        print(f"  SKIP {out.name}: parse yielded no candidate "
+                              f"names but a populated file exists — not overwriting")
+                        continue
                     write_csv(rows, out)
                     summarize(rows, f"TX {chamber.title()} {year}")
                     all_rows.extend(rows)

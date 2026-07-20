@@ -36,27 +36,27 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4450,
+    "white_nh": 0.4589,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8499,
+    "black_nh": 0.8685,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.6461,
+    "hispanic": 0.5796,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.5125,
+    "other": 0.4658,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "Multi-source 7-poll racial avg + 0 topline-only"
-GENERIC_BALLOT_UPDATED = "2026-06-06"  # ISO date
+GENERIC_BALLOT_SOURCE = "Multi-source 2-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_UPDATED = "2026-07-20"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5318  # D+5.0pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5270  # D+5.0pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)
@@ -84,24 +84,32 @@ NATIONAL_DEMO_WEIGHTS: dict[str, float] = {
 REGRESSION_COEFFICIENTS: dict[str, float] = {
     # From FULL model with presidential baseline (run_phase1_regression.py output)
     # n=268 contested races with full data (presidential + finance)
-    # R²=0.7706, Adj-R²=0.7635, Residual SE=0.0785
-    "intercept":                  0.1520,
-    "dem_pres_2p_baseline":       0.6604,
-    "dem_incumbent":              0.0600,
-    "rep_incumbent":             -0.0739,
-    "chamber_senate":            -0.0261,
+    # R²=0.7953, Residual SE=0.0742
+    #
+    # REFIT 2026-07-20: the wikilink parser fix restored 34 mislabeled
+    # incumbency flags in phase1_dataset, so the regression was re-run.
+    # Backtests old→new: 2022 Brier 0.0220→0.0214 (acc 99.0→97.9%),
+    # 2018 Brier 0.0800→0.0859 (acc 87.9% both) — a wash; adopted because
+    # the new fit uses corrected labels. Previous values: intercept 0.1520,
+    # pass-through 0.6604, dem_inc 0.0600, rep_inc −0.0739, senate −0.0261,
+    # viability 0.0393, share 0.0624, sigma 0.0785.
+    "intercept":                  0.1781,
+    "dem_pres_2p_baseline":       0.5962,
+    "dem_incumbent":              0.0676,
+    "rep_incumbent":             -0.0804,
+    "chamber_senate":            -0.0263,
     # national_env: auto-selected based on FINANCE_DATA_THROUGH (see below).
-    # Pre-July: 0.0052 (with_pres model, less suppressed by finance collinearity)
-    # Post-July: 0.0027 (full model, when dem_fundraising_share is fully populated)
+    # Pre-July: 0.0049 (with_pres model, less suppressed by finance collinearity)
+    # Post-July: 0.0025 (full model, when dem_fundraising_share is fully populated)
     "national_env":               None,  # set automatically by _auto_select_env_coef()
-    "challenger_viability_flag":  0.0393,
-    # dem_fundraising_share: D raised / (D+R raised). From full model = +0.0624 per unit (0–1).
+    "challenger_viability_flag":  0.0446,
+    # dem_fundraising_share: D raised / (D+R raised). From full model = +0.0731 per unit (0–1).
     # NOTE: This coefficient is temporally unstable — early cycles (2002–2010): +0.22,
-    # late cycles (2014–2022): ~0.00. The full-model average (0.0624) is used here.
+    # late cycles (2014–2022): ~0.00. The full-model average is used here.
     # Pre-primary party assignment is approximate (challenger_raised may include
     # same-party primary opponents). Treat with caution until post-July TEC data.
-    "dem_fundraising_share":      0.0624,
-    "sigma":                      0.0785,  # residual SE from FULL model (for win probability CDF)
+    "dem_fundraising_share":      0.0731,
+    "sigma":                      0.0742,  # residual SE from FULL model (for win probability CDF)
 }
 
 # ---------------------------------------------------------------------------
@@ -125,10 +133,35 @@ VIABILITY_THRESHOLD_POSTPRIMARY: dict[str, float] = {
 }
 
 VIABILITY_THRESHOLD_SEMIJUL: dict[str, float] = {
-    # Placeholder: ~70% of full-cycle (to be calibrated from July data)
-    "house":   70_000,
-    "senate": 175_000,
+    # Calibrated 2026-07-20 from TEC cover.csv (all-cycles cache): median
+    # election-year raised as of Jul 20 (reports with periodStart in the
+    # election year AND filed by Jul 20 — the same quantity the 2026 pipeline
+    # measures) among ultimately-viable candidates (full-cycle >= $100K house /
+    # $250K senate). Off-year cycles are the comparators for 2026:
+    #   House:  $82K (2018) / $115K (2022) → $80K (lower end, per convention)
+    #   Senate: $305K (2018) / $135K (2022), n≈28 so highly variable → $135K
+    # NOTE: the POSTPRIMARY apr30 medians documented above could NOT be
+    # reproduced under this election-year-only window (2018 house median is
+    # ~$0.3K, not $40K) — the original calibration evidently included prior-
+    # year fundraising, a broader window than the pipeline applies. The
+    # SEMIJUL numbers here are measurement-consistent with the pipeline.
+    "house":   80_000,
+    "senate": 135_000,
 }
+
+# Auto-select the viability threshold era from FINANCE_DATA_THROUGH, the same
+# way the national_env coefficient switches (see below): July semi-annual data
+# should not be judged against thresholds calibrated to April war chests.
+def _auto_select_viability_threshold() -> dict[str, float]:
+    try:
+        month = int(FINANCE_DATA_THROUGH.replace("-", "")[4:6])
+    except (ValueError, IndexError):
+        month = 1
+    return VIABILITY_THRESHOLD_SEMIJUL if month >= 7 else VIABILITY_THRESHOLD_POSTPRIMARY
+
+# The dict collectors should import; resolved at import time (below, after
+# FINANCE_DATA_THROUGH is defined).
+VIABILITY_THRESHOLD: dict[str, float] = {}
 
 # ---------------------------------------------------------------------------
 # IE (Independent Expenditure) signal
@@ -155,14 +188,14 @@ VIABILITY_THRESHOLD_SEMIJUL: dict[str, float] = {
 
 IE_COEFFICIENT:   float = 0.074     # from full_ie regression (with_ie model p=0.000)
 IE_MIN_THRESHOLD: float = 50_000    # $50K minimum total IEs for signal to apply
-IE_WEIGHT:        float = 0.5       # post-runoff; update to 0.75 after July TEC filing
-IE_DATA_THROUGH:  str   = "2026-04-06"  # update when re-running collect_ies_2026.py
+IE_WEIGHT:        float = 0.75      # post-July semi-annual filing (was 0.5 post-runoff)
+IE_DATA_THROUGH:  str   = "2026-07-20"  # update when re-running collect_ies_2026.py
 
 # ---------------------------------------------------------------------------
 # Finance data currency
 # ---------------------------------------------------------------------------
-FINANCE_DATA_THROUGH = "2026-05-16"  # last TEC filing deadline captured (runoff 8-day reports)
-FINANCE_CUTOFF_POSTPRIMARY = "20260606"  # include all reports filed through today (captures May 26 runoff reports); still pre-July semi-annual
+FINANCE_DATA_THROUGH = "2026-07-15"  # last TEC filing deadline captured (July semi-annual report)
+FINANCE_CUTOFF_POSTPRIMARY = "20260720"  # include all reports filed through today (captures July semi-annual)
 
 # ---------------------------------------------------------------------------
 # Auto-select national_env coefficient based on finance data currency
@@ -176,8 +209,8 @@ FINANCE_CUTOFF_POSTPRIMARY = "20260606"  # include all reports filed through tod
 # Set NATIONAL_ENV_COEF_OVERRIDE to force a specific value (bypasses auto).
 NATIONAL_ENV_COEF_OVERRIDE: float | None = None
 
-_ENV_COEF_WITH_PRES = 0.0052   # less suppressed by finance collinearity
-_ENV_COEF_FULL_MODEL = 0.0027  # full model with finance vars active
+_ENV_COEF_WITH_PRES = 0.0049   # less suppressed by finance collinearity (2026-07-20 refit; was 0.0052)
+_ENV_COEF_FULL_MODEL = 0.0025  # full model with finance vars active (2026-07-20 refit; was 0.0027)
 
 def _auto_select_env_coef() -> float:
     """Select national_env coefficient based on FINANCE_DATA_THROUGH date."""
@@ -202,6 +235,7 @@ def _auto_select_env_coef() -> float:
 
 # Apply auto-selection at import time
 REGRESSION_COEFFICIENTS["national_env"] = _auto_select_env_coef()
+VIABILITY_THRESHOLD.update(_auto_select_viability_threshold())
 
 # ---------------------------------------------------------------------------
 # Model scenarios

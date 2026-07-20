@@ -93,15 +93,15 @@ BACKTEST_CONFIGS: dict[int, dict] = {
         # is available and the full-model coefficient (0.0027) is suppressed by
         # collinearity with finance variables
         "regression_coefficients": {
-            "intercept":                 0.1520,
-            "dem_pres_2p_baseline":      0.6604,
-            "dem_incumbent":             0.0600,
-            "rep_incumbent":            -0.0739,
-            "chamber_senate":           -0.0261,
-            "national_env":              0.0052,
-            "challenger_viability_flag": 0.0393,
-            "dem_fundraising_share":     0.0624,
-            "sigma":                     0.0785,
+            "intercept":                 0.1781,
+            "dem_pres_2p_baseline":      0.5962,
+            "dem_incumbent":             0.0676,
+            "rep_incumbent":            -0.0804,
+            "chamber_senate":           -0.0263,
+            "national_env":              0.0049,
+            "challenger_viability_flag": 0.0446,
+            "dem_fundraising_share":     0.0731,
+            "sigma":                     0.0742,
         },
 
         # Finance: 2022 full-cycle finance data available
@@ -170,14 +170,14 @@ BACKTEST_CONFIGS: dict[int, dict] = {
         "env_dial": 0,
 
         "regression_coefficients": {
-            "intercept":                 0.1520,
-            "dem_pres_2p_baseline":      0.6604,
-            "dem_incumbent":             0.0600,
-            "rep_incumbent":            -0.0739,
-            "chamber_senate":           -0.0261,
-            "national_env":              0.0027,
-            "challenger_viability_flag": 0.0393,
-            "sigma":                     0.0785,
+            "intercept":                 0.1781,
+            "dem_pres_2p_baseline":      0.5962,
+            "dem_incumbent":             0.0676,
+            "rep_incumbent":            -0.0804,
+            "chamber_senate":           -0.0263,
+            "national_env":              0.0025,
+            "challenger_viability_flag": 0.0446,
+            "sigma":                     0.0742,
         },
 
         "use_finance": False,

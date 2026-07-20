@@ -67,6 +67,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from collect_finance import (
     _tec_zip_central_dir,
     _tec_extract_file,
+    _name_match,
+    _normalize_name,
     TEC_ZIP_URL,
     TEC_ENCODING,
 )
@@ -461,6 +463,37 @@ def _load_dce_filer_parties() -> dict[str, str]:
     return lookup
 
 
+_nominee_cache: dict | None = None
+
+
+def _nominee_party(chamber: str, district: int, candidate_name: str) -> str | None:
+    """
+    Party of the 2026 nominee this beneficiary name matches, if any.
+    Names that match neither nominee (primary losers, statewide figures)
+    return None — their spending is not general-election signal.
+    """
+    global _nominee_cache
+    if _nominee_cache is None:
+        _nominee_cache = {}
+        path = DATA_PROC / "candidates_2026.csv"
+        if path.exists():
+            import pandas as pd
+            df = pd.read_csv(path)
+            for _, r in df.iterrows():
+                key = (str(r["chamber"]).strip().lower(), int(r["district"]))
+                _nominee_cache[key] = {
+                    "R": _normalize_name(str(r["r_candidate"])) if pd.notna(r.get("r_candidate")) else "",
+                    "D": _normalize_name(str(r["d_candidate"])) if pd.notna(r.get("d_candidate")) else "",
+                }
+    noms = _nominee_cache.get((chamber.strip().lower(), district))
+    if not noms or not candidate_name.strip():
+        return None
+    cn = _normalize_name(candidate_name)
+    matches = [p for p in ("R", "D")
+               if noms[p] and (cn == noms[p] or _name_match(cn, noms[p]))]
+    return matches[0] if len(matches) == 1 else None
+
+
 def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
     """
     Extract cand.csv from TEC ZIP — Direct Campaign Expenditure records
@@ -528,15 +561,25 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
         cand_last = row.get("candidateNameLast", "").strip()
         candidate_name = f"{cand_first} {cand_last}".strip()
 
-        # Classify direction using filer party lookup
+        # Classify direction using filer party lookup, then fall back to the
+        # BENEFICIARY's party: DCE rows name the candidate the spending
+        # supports, and matching them against the 2026 nominee roster is more
+        # reliable than filer reputation (Border Health PAC's $10K backed an
+        # HD41 primary loser — filer-party classification would have mis-
+        # signed it; nominee matching correctly leaves it out).
         filer_party = filer_parties.get(filer_name.upper())
-        if filer_party == "R":
-            direction = "R_favor"
-        elif filer_party == "D":
-            direction = "D_favor"
+        if filer_party in ("R", "D"):
+            direction = f"{filer_party}_favor"
+            method = "dce_filer_lookup"
         else:
-            direction = "unknown"
-            unclassified_filers[filer_name] += amount
+            beneficiary_party = _nominee_party(chamber, district, candidate_name)
+            if beneficiary_party in ("R", "D"):
+                direction = f"{beneficiary_party}_favor"
+                method = "beneficiary_nominee"
+            else:
+                direction = "unknown"
+                method = "unclassified"
+                unclassified_filers[filer_name] += amount
 
         rows.append({
             "chamber":               chamber.title(),
@@ -549,7 +592,7 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
             "amount":                round(amount, 2),
             "expenditure_date":      dt,
             "purpose_description":   row.get("expendDescr", "").strip()[:200],
-            "classification_method": "dce_filer_lookup",
+            "classification_method": method,
             "source_file":           "cand.csv",
         })
 
@@ -854,8 +897,17 @@ def main():
     print("\nReading TEC ZIP central directory...")
     cd = _tec_zip_central_dir(TEC_ZIP_URL)
     if not cd:
-        print("ERROR: Could not read TEC ZIP central directory.")
-        sys.exit(1)
+        # Offline fallback: _tec_extract_file serves cached members before
+        # touching the network, so a stale/blocked TEC endpoint doesn't stop
+        # a re-classification run against already-downloaded data.
+        from collect_finance import FINANCE_CACHE
+        cd = {f: {} for f in ("spacs.csv", "cand.csv", "expend_01.csv")
+              if (FINANCE_CACHE / f"tec_{f}").exists()}
+        if cd:
+            print(f"  TEC endpoint unavailable — using cached members: {sorted(cd)}")
+        else:
+            print("ERROR: Could not read TEC ZIP central directory (no cache).")
+            sys.exit(1)
 
     # Step 1: Parse spacs.csv for SUPPORT/OPPOSE mappings
     spacs = load_spacs(cd, verbose=args.verbose)

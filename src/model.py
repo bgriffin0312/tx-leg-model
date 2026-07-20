@@ -84,22 +84,26 @@ CURRENT_ENV: float = round((GENERIC_BALLOT_TOPLINE_D_2P - 0.5) * 200, 1)
 _ie_weight_override: float | None = None
 
 # Monte Carlo noise decomposition
-# Total σ = 0.0785; split into national (correlated) and idiosyncratic (independent)
-SIGMA_TOTAL = 0.0785
+# Total σ = the regression's residual SE (model_config), split into national
+# (correlated) and idiosyncratic (independent) components. Splits are defined
+# as VARIANCE SHARES so the decomposition tracks σ refits automatically
+# (2026-07-20: σ 0.0785 → 0.0742 after the incumbency-label repair refit;
+# the old absolute national=0.060 would silently have become 65% shared).
+SIGMA_TOTAL = COEFS.get("sigma", 0.0785)
 
 SIGMA_SPLITS = {
-    "high-corr": {  # current default: ~58% shared variance
-        "national": 0.060,
-        "idio":     (SIGMA_TOTAL**2 - 0.060**2)**0.5,  # = 0.05062
+    "high-corr": {  # current default: 58% shared variance
+        "national": (0.58 * SIGMA_TOTAL**2)**0.5,
+        "idio":     (0.42 * SIGMA_TOTAL**2)**0.5,
         "desc":     "high correlation (58% shared variance)",
     },
-    "low-corr": {   # proposed: ~33% shared variance
-        "national": 0.045,
-        "idio":     (SIGMA_TOTAL**2 - 0.045**2)**0.5,  # = 0.06437
+    "low-corr": {   # proposed: 33% shared variance
+        "national": (0.33 * SIGMA_TOTAL**2)**0.5,
+        "idio":     (0.67 * SIGMA_TOTAL**2)**0.5,
         "desc":     "low correlation (33% shared variance)",
     },
 }
-# Both satisfy: sqrt(national² + idio²) = SIGMA_TOTAL = 0.0785 exactly
+# Both satisfy: sqrt(national² + idio²) = SIGMA_TOTAL exactly
 
 _sigma_split = "high-corr"  # active split; changed via --sigma-split
 SIGMA_NATIONAL = SIGMA_SPLITS[_sigma_split]["national"]
@@ -116,6 +120,7 @@ def _normalize_name(name: str) -> str:
     if not name or (isinstance(name, float) and np.isnan(name)):
         return ""
     s = str(name).lower().strip()
+    s = s.replace("-", " ")  # hyphenated surnames match their spaced form
     s = re.sub(r"\b(jr|sr|ii|iii|iv)\b\.?", "", s)
     s = re.sub(r"[^\w\s]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -126,13 +131,18 @@ _war_cache: dict | None = None   # lazy-loaded; None means not yet attempted
 _war_names_by_party: dict | None = None  # {party: [(norm_name, tokens, avg_war), ...]}
 
 
-def _fuzzy_war_match(query_norm: str, party: str) -> float | None:
+def _fuzzy_war_match(query_norm: str, party: str,
+                     chamber: str = "", district: int | None = None) -> float | None:
     """
     Try fuzzy matching against WAR candidates when exact match fails.
     Strategy 1: subset match — all tokens in shorter name appear in longer name
                 (handles middle names: "john bryant" ⊂ "john wiley bryant")
     Strategy 2: last-name + first-initial — "jm lozano" matches "jose manuel lozano"
-                if last tokens match and first chars of first tokens match
+                if last tokens match and first chars of first tokens match.
+                Too loose for common surnames on its own (matched Charlene Ward
+                Johnson HD139 to Collin Johnson HD57), so it additionally
+                requires the WAR candidate's latest race to be in the same
+                chamber + district when that context is provided.
     Returns avg_war or None.
     """
     if not _war_names_by_party or party not in _war_names_by_party:
@@ -144,14 +154,22 @@ def _fuzzy_war_match(query_norm: str, party: str) -> float | None:
     query_first_char = query_norm.split()[0][0] if query_norm.split() else ""
     query_last = query_norm.split()[-1] if query_norm.split() else ""
 
-    for cand_norm, cand_tokens, avg_war in _war_names_by_party[party]:
+    for cand_norm, cand_tokens, avg_war, cand_chamber, cand_district in _war_names_by_party[party]:
         # Strategy 1: subset match (all tokens of shorter name in longer)
         if query_tokens and cand_tokens:
             shorter, longer = (query_tokens, cand_tokens) if len(query_tokens) <= len(cand_tokens) else (cand_tokens, query_tokens)
             if shorter <= longer and len(shorter) >= 2:
                 return avg_war
 
-        # Strategy 2: last name + first initial
+        # Strategy 2: last name + first initial — only with district agreement
+        if chamber and district is not None:
+            same_seat = (
+                str(cand_chamber).strip().lower() == str(chamber).strip().lower()
+                and cand_district is not None
+                and str(cand_district) == str(district)
+            )
+            if not same_seat:
+                continue
         cand_first_char = cand_norm.split()[0][0] if cand_norm.split() else ""
         cand_last = cand_norm.split()[-1] if cand_norm.split() else ""
         if (query_last == cand_last and query_last
@@ -191,8 +209,11 @@ def _get_war_lookup() -> dict[tuple[str, str], float]:
         avg_war = row.get("avg_war")
         if norm_name and party in ("D", "R") and pd.notna(avg_war):
             lookup[(norm_name, party)] = float(avg_war)
+            latest_district = row.get("latest_district")
             names_by_party.setdefault(party, []).append(
-                (norm_name, set(norm_name.split()), float(avg_war))
+                (norm_name, set(norm_name.split()), float(avg_war),
+                 str(row.get("latest_chamber", "")),
+                 int(latest_district) if pd.notna(latest_district) else None)
             )
 
     print(f"  [WAR] Loaded {len(lookup)} candidates with avg WAR data.")
@@ -448,7 +469,9 @@ def build_linear_predictions(df: pd.DataFrame,
             match_type = "exact" if avg_war is not None else None
             # Try fuzzy match if exact fails
             if avg_war is None:
-                avg_war = _fuzzy_war_match(inc_norm, inc_party)
+                avg_war = _fuzzy_war_match(inc_norm, inc_party,
+                                           chamber=str(row.get("chamber", "")),
+                                           district=row.get("district"))
                 if avg_war is not None:
                     match_type = "fuzzy"
             if avg_war is not None:
@@ -781,8 +804,12 @@ def main():
 
     envs = args.envs if args.envs else ENV_SCENARIOS
 
-    # Auto-inject current environment if not already close to an existing scenario
-    if not args.envs and not any(abs(e - CURRENT_ENV) < 0.5 for e in envs):
+    # Auto-inject current environment if not already close to an existing
+    # scenario. Tolerance MUST match _env_label's "(current)" tag (0.2): with
+    # a looser skip threshold, a current env of e.g. D+5.4 was neither
+    # injected (within 0.5 of the fixed D+5 scenario) nor labeled current
+    # (outside 0.2), so the default run had no actual-current row at all.
+    if not args.envs and not any(abs(e - CURRENT_ENV) < 0.2 for e in envs):
         envs = sorted(set(list(envs) + [CURRENT_ENV]))
 
     effective_ie_weight = _ie_weight_override if _ie_weight_override is not None else IE_WEIGHT
@@ -829,7 +856,9 @@ def main():
             inc_norm = _normalize_name(str(row.get("incumbent", "")).strip())
             if (inc_norm, inc_party) in war_lookup:
                 n_exact_pre += 1
-            elif _fuzzy_war_match(inc_norm, inc_party) is not None:
+            elif _fuzzy_war_match(inc_norm, inc_party,
+                                  chamber=str(row.get("chamber", "")),
+                                  district=row.get("district")) is not None:
                 n_fuzzy_pre += 1
         n_total = n_exact_pre + n_fuzzy_pre
         print(f"  WAR persistence:        β={WAR_PERSISTENCE_COEF}  "

@@ -644,6 +644,12 @@ def _name_match(a: str, b: str) -> bool:
     if len(common) >= 2:
         return True
     if len(common) == 1 and len(next(iter(common))) >= 5:
+        # NOTE: a single shared long token is deliberately loose — TEC legal
+        # names vs ballot nicknames diverge too wildly for stricter rules
+        # (HERIBERTO/"Eddie" Morales, "Jay"/DAVID JONES Hardaway). When a
+        # filer could match candidates on BOTH sides of a race, callers must
+        # disambiguate by match strength (see _match_strength in
+        # collect_finance_2026.py) instead of relying on this test alone.
         return True
     # Prefix match: handles nickname/formal pairs like TRENT/TRENTON, STEVE/STEVEN
     for ta in tokens_a:

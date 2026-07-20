@@ -56,7 +56,7 @@ from collect_finance import (
     TEC_ENCODING,
 )
 from model_config import (
-    VIABILITY_THRESHOLD_POSTPRIMARY as THRESHOLD,
+    VIABILITY_THRESHOLD as THRESHOLD,  # era auto-selected from FINANCE_DATA_THROUGH
     FINANCE_CUTOFF_POSTPRIMARY,      # "20260430"
     FINANCE_DATA_THROUGH,
 )
@@ -232,6 +232,31 @@ def _match_filer_to_candidate(filer_name: str, candidate_name: str) -> bool:
     return _name_match(_normalize_name(filer_name), _normalize_name(candidate_name))
 
 
+def _match_strength(filer_name: str, candidate_name: str) -> int:
+    """
+    Graded match between a TEC filer and a nominee, so a filer who loosely
+    matches BOTH nominees can be assigned to the stronger side.
+      3 = exact normalized equality or >=2 significant common tokens
+          ("LONGORIA OSCAR L" vs "OSCAR LONGORIA")
+      1 = weaker fuzzy match (single long surname token, prefix rule) —
+          enough when only one side matches ("MORALES HERIBERTO" vs
+          "EDDIE MORALES"), never enough to beat a 3 on the other side
+          ("LONGORIA OSCAR L" vs "OSCAR ROSA" scores 1 and loses)
+      0 = no match
+    """
+    if not candidate_name:
+        return 0
+    a = _normalize_name(filer_name)
+    b = _normalize_name(candidate_name)
+    if not _name_match(a, b):
+        return 0
+    if a == b:
+        return 3
+    tokens_a = set(t for t in a.split() if len(t) >= 4)
+    tokens_b = set(t for t in b.split() if len(t) >= 4)
+    return 3 if len(tokens_a & tokens_b) >= 2 else 1
+
+
 def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> list[dict]:
     """
     For each district with TEC data:
@@ -280,15 +305,23 @@ def assign_parties_and_aggregate(by_district: dict, districts_info: dict) -> lis
                 name = fdata["name"]
                 total = fdata["total"]
 
-                if cand["r"] and _match_filer_to_candidate(name, cand["r"]):
+                # Score against BOTH nominees and take the stronger side.
+                # First-match-wins with R checked first booked Oscar Longoria's
+                # (D inc, HD35) own filings to R challenger "Oscar Rosa" via a
+                # shared-first-name fuzzy hit; strength comparison fixes that
+                # while keeping loose single-surname matches when unambiguous.
+                sr = _match_strength(name, cand["r"]) if cand["r"] else 0
+                sd = _match_strength(name, cand["d"]) if cand["d"] else 0
+                if sr > sd:
                     r_total += total
                     if not r_name_found:
                         r_name_found = name
-                elif cand["d"] and _match_filer_to_candidate(name, cand["d"]):
+                elif sd > sr:
                     d_total += total
                     if not d_name_found:
                         d_name_found = name
                 else:
+                    # sr == sd: either no match, or an ambiguous tie — leave out
                     unmatched_names.append(name)
 
             # Viability: does the opposition party nominee have meaningful funding?

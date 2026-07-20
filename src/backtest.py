@@ -47,8 +47,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from backtest_config import BACKTEST_CONFIGS
 
 # Monte Carlo parameters (same as model.py)
-SIGMA_TOTAL    = 0.0785
-SIGMA_NATIONAL = 0.060
+SIGMA_TOTAL    = 0.0742
+SIGMA_NATIONAL = (0.58 * SIGMA_TOTAL**2)**0.5  # 58% shared variance
 SIGMA_IDIO     = (SIGMA_TOTAL**2 - SIGMA_NATIONAL**2)**0.5  # = 0.05062
 N_SIMULATIONS  = 10_000
 

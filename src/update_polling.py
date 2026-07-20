@@ -163,7 +163,7 @@ YOUGOV_PDFS = [
     # Keep ONE YouGov per aggregation run — including two back-to-back weeklies
     # double-counts the pollster's house effect. Use the most recent in-window
     # fielding and drop older ones once a fresher poll is available.
-    ("2026-05-29_to_06-01", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_AvLU7vY.pdf"),
+    ("2026-07-10_to_13", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_ie0SzVb.pdf"),
 ]
 
 
@@ -217,15 +217,18 @@ def _parse_yougov_pdf(pdf_bytes: bytes) -> dict | None:
         header_line = dem_line = rep_line = n_line = None
 
         for line in lines:
+            # Answer-option wording changed mid-2026: "The Democratic Party's
+            # candidate" -> "The Democratic candidate". Match both.
+            collapsed = line.replace(" ", "").lower()
             if "Total" in line and "White" in line and "Black" in line and "Hispanic" in line:
                 header_line = line
-            elif "DemocraticParty" in line.replace(" ", ""):
+            elif collapsed.startswith("thedemocratic") or "democraticparty" in collapsed:
                 if dem_line is None:
                     dem_line = line
-            elif "RepublicanParty" in line.replace(" ", ""):
+            elif collapsed.startswith("therepublican") or "republicanparty" in collapsed:
                 if rep_line is None:
                     rep_line = line
-            elif "UnweightedN" in line.replace(" ", ""):
+            elif "unweightedn" in collapsed:
                 if n_line is None:
                     n_line = line
 
