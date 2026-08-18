@@ -316,16 +316,40 @@ def _tec_zip_central_dir(url: str) -> dict | None:
     return files
 
 
-def _tec_extract_file(url: str, file_info: dict, fname: str) -> bytes | None:
+# Set True (or pass --force-download) to bypass the on-disk TEC cache.
+# The cache has no TTL: without this, a stale tec_*.csv is reused forever and
+# the failure mode is invisible — a run looks like "no new filings" when it is
+# really "no new download". Callers set this from their --force-download flag.
+FORCE_TEC_DOWNLOAD = False
+
+
+def _tec_extract_file(url: str, file_info: dict, fname: str,
+                      force: bool | None = None) -> bytes | None:
     """
     Extract a single file from a remote ZIP using HTTP range requests.
     Reads the local file header to find the exact data offset, then downloads
     and decompresses the compressed data.
+
+    force=True bypasses the cache and re-downloads. The existing cache file is
+    renamed to *.prev rather than deleted, so a failed refresh is recoverable.
     """
+    if force is None:
+        force = FORCE_TEC_DOWNLOAD
+
     cache_path = FINANCE_CACHE / f"tec_{fname.replace('/', '_')}"
     if cache_path.exists() and cache_path.stat().st_size > 100:
-        print(f"  TEC cache hit: {fname}")
-        return cache_path.read_bytes()
+        if not force:
+            age_days = (time.time() - cache_path.stat().st_mtime) / 86400
+            print(f"  TEC cache hit: {fname} (cached {age_days:.1f}d ago)")
+            if age_days > 7:
+                print(f"    WARNING: cache is {age_days:.0f} days old — "
+                      f"re-run with --force-download for current TEC data")
+            return cache_path.read_bytes()
+        prev = cache_path.with_suffix(cache_path.suffix + ".prev")
+        prev.unlink(missing_ok=True)
+        cache_path.rename(prev)
+        print(f"  TEC cache bypassed (--force-download): {fname} "
+              f"— previous kept at {prev.name}")
 
     # Local-ZIP fallback path: read straight from the downloaded ZIP.
     if file_info.get("_local"):

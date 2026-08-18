@@ -4,21 +4,33 @@ model_config.py
 Manually-updated configuration for the Phase 2 TX legislative election model.
 
 UPDATE TRIGGERS:
-  1. TEC filing deadline passes (Jan, Apr, Jul, Oct) — re-run collect_finance.py,
-     then update FINANCE_DATA_THROUGH below.
-  2. Generic ballot topline shifts > 1pp — check Civiqs monthly for race-specific
-     crosstabs, then update RACE_GENERIC_BALLOT_D_SHARE and GENERIC_BALLOT_UPDATED.
+  1. TEC filing deadline passes (Jan, Apr, Jul, Oct) — re-run collect_finance_2026.py
+     (use --force-download; the TEC cache has no TTL), then update
+     FINANCE_DATA_THROUGH below. That constant means "last filing DEADLINE
+     captured" and switches coefficient eras — don't bump it just because data
+     was re-pulled.
+  2. Generic ballot topline shifts > 1pp — run `python src/update_polling.py`
+     (dry run) and then `--apply`. It rewrites RACE_GENERIC_BALLOT_D_SHARE,
+     GENERIC_BALLOT_SOURCE/UPDATED and the topline below.
 
-HOW TO READ CIVIQS RACE-SPECIFIC GENERIC BALLOT:
-  Go to civiqs.com → "Congressional Generic Ballot" → filter by "Race/Ethnicity"
-  Record the Democratic 2-party share for each group:
-    D% / (D% + R%) for each racial category.
-  Use Registered Voter (RV) numbers, not Likely Voter.
+WHERE THE RACIAL CROSSTABS COME FROM (superseded Civiqs, 2026-08-15):
+  Civiqs is no longer used — its by-race view sits behind an interactive
+  dashboard. update_polling.py aggregates free published crosstabs instead:
+  Economist/YouGov weekly (hand-maintained URL list) + anything added by hand
+  to data/raw/racial_crosstab_inputs.csv. Most pollsters publish NO racial
+  crosstabs at all — verified 2026-08-15: Quinnipiac, CNN/SSRS, Emerson,
+  Ipsos (party-ID only), Marist (no national generic ballot since March),
+  RMG (confidential), Cygnal (narrative deck only). Ones that DO: YouGov
+  (adults universe — its race rows are NOT registered voters), Fox/Beacon-Shaw
+  (RV, but no Black column), Pew, Big Data Poll (via MarketSight), and
+  The Argument/Verasight (n=3,000 RV, best single source).
+
+  Two-party share = D% / (D% + R%). Keep leaned/unleaned consistent across
+  polls. A raw RCP margin understates the two-party margin (D+6.8 ≈ D+7.5 2p).
 
 NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
-  - FiveThirtyEight/Silver Bulletin generic ballot tracker
+  - Silver Bulletin generic ballot tracker
   - RealClearPolitics average
-  - The Economist model
 """
 
 # ---------------------------------------------------------------------------
@@ -27,36 +39,37 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
 # These are the Democratic 2-party share of the generic congressional ballot
 # disaggregated by racial/ethnic group.
 #
-# Source: Civiqs monthly tracking (civiqs.com), Registered Voter numbers
-# Last updated: 2026-04-06
-# Topline at time of update: D+4.8 (2026-04-06)
+# Source + last-updated date are recorded in GENERIC_BALLOT_SOURCE /
+# GENERIC_BALLOT_UPDATED below — update_polling.py rewrites all of these
+# together, so treat those two constants as authoritative rather than any
+# comment here.
 #
-# !!! UPDATE THESE WHEN CIVIQS PUBLISHES A NEW MONTHLY RELEASE !!!
-# !!! OR WHEN THE TOPLINE AGGREGATE SHIFTS BY MORE THAN 1PP     !!!
+# !!! DO NOT HAND-EDIT — run `python src/update_polling.py --apply`  !!!
+# !!! Refresh when the topline aggregate shifts by more than 1pp     !!!
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4589,
+    "white_nh": 0.4789,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8685,
+    "black_nh": 0.8755,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.5796,
+    "hispanic": 0.6278,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.4658,
+    "other": 0.4508,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "Multi-source 2-poll racial avg + 0 topline-only"
-GENERIC_BALLOT_UPDATED = "2026-07-20"  # ISO date
+GENERIC_BALLOT_SOURCE = "Multi-source 3-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_UPDATED = "2026-08-15"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5270  # D+5.0pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5455  # D+9.1pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)
@@ -195,7 +208,7 @@ IE_DATA_THROUGH:  str   = "2026-07-20"  # update when re-running collect_ies_202
 # Finance data currency
 # ---------------------------------------------------------------------------
 FINANCE_DATA_THROUGH = "2026-07-15"  # last TEC filing deadline captured (July semi-annual report)
-FINANCE_CUTOFF_POSTPRIMARY = "20260720"  # include all reports filed through today (captures July semi-annual)
+FINANCE_CUTOFF_POSTPRIMARY = "20260815"  # include all reports filed through today (July semi-annual + Aug 5 monthly PAC/IE reports)
 
 # ---------------------------------------------------------------------------
 # Auto-select national_env coefficient based on finance data currency

@@ -163,7 +163,7 @@ YOUGOV_PDFS = [
     # Keep ONE YouGov per aggregation run — including two back-to-back weeklies
     # double-counts the pollster's house effect. Use the most recent in-window
     # fielding and drop older ones once a fresher poll is available.
-    ("2026-07-10_to_13", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_ie0SzVb.pdf"),
+    ("2026-08-07_to_10", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_pKJG0WT.pdf"),
 ]
 
 
@@ -215,6 +215,12 @@ def _parse_yougov_pdf(pdf_bytes: bytes) -> dict | None:
 
         lines = text.split("\n")
         header_line = dem_line = rep_line = n_line = None
+        # The GenericCongressionalVote page repeats the question across several
+        # banner blocks. Block 1 carries the Race columns, but its "Total" is
+        # ALL ADULT CITIZENS — the poll's universe. A later block carries a
+        # "Reg Voters" column, which is the registered-voter topline that RCP
+        # and Silver Bulletin actually list. Capture both.
+        rv_header_line = rv_dem_line = rv_rep_line = None
 
         for line in lines:
             # Answer-option wording changed mid-2026: "The Democratic Party's
@@ -222,12 +228,19 @@ def _parse_yougov_pdf(pdf_bytes: bytes) -> dict | None:
             collapsed = line.replace(" ", "").lower()
             if "Total" in line and "White" in line and "Black" in line and "Hispanic" in line:
                 header_line = line
+            elif "Total" in line and "Voters" in line:
+                if rv_header_line is None:
+                    rv_header_line = line
             elif collapsed.startswith("thedemocratic") or "democraticparty" in collapsed:
                 if dem_line is None:
                     dem_line = line
+                elif rv_header_line is not None and rv_dem_line is None:
+                    rv_dem_line = line
             elif collapsed.startswith("therepublican") or "republicanparty" in collapsed:
                 if rep_line is None:
                     rep_line = line
+                elif rv_header_line is not None and rv_rep_line is None:
+                    rv_rep_line = line
             elif "unweightedn" in collapsed:
                 if n_line is None:
                     n_line = line
@@ -255,11 +268,30 @@ def _parse_yougov_pdf(pdf_bytes: bytes) -> dict | None:
         if len(dem_pcts) <= max_needed or len(rep_pcts) <= max_needed:
             continue
 
+        # Topline: prefer the "Reg Voters" column over the all-adults Total.
+        # NOTE: the race rows above stay ADULT-based — YouGov publishes no
+        # race x registered-voter crosstab — so `other`, which is back-solved
+        # from the topline in solve_other_from_topline(), absorbs the whole
+        # adult->RV universe gap. Watch that value after a YouGov-only run.
+        total_dem, total_rep = dem_pcts[0], rep_pcts[0]
+        total_universe = "adults"
+        if rv_header_line and rv_dem_line and rv_rep_line:
+            rv_headers = re.split(r"\s+", rv_header_line.strip())
+            rv_idx = next((i for i, h in enumerate(rv_headers)
+                           if h.lower() == "voters"), None)
+            rv_dem = extract_pcts(rv_dem_line)
+            rv_rep = extract_pcts(rv_rep_line)
+            if (rv_idx is not None and len(rv_dem) > rv_idx
+                    and len(rv_rep) > rv_idx):
+                total_dem, total_rep = rv_dem[rv_idx], rv_rep[rv_idx]
+                total_universe = "registered_voters"
+
         result = {
             "white":    {"dem": dem_pcts[white_idx], "rep": rep_pcts[white_idx]},
             "black":    {"dem": dem_pcts[black_idx], "rep": rep_pcts[black_idx]},
             "hispanic": {"dem": dem_pcts[hisp_idx],  "rep": rep_pcts[hisp_idx]},
-            "total":    {"dem": dem_pcts[0],          "rep": rep_pcts[0]},
+            "total":    {"dem": total_dem,           "rep": total_rep},
+            "total_universe": total_universe,
             "date_range": date_range,
         }
 
@@ -764,9 +796,13 @@ def apply_to_config(agg: dict, other_d2p: float):
         rf'\g<1>\g<2>{today_str}\g<2>',
         text,
     )
+    # Rewrite the trailing comment too, not just the number — otherwise the
+    # comment keeps asserting the *old* margin next to the new value and reads
+    # as authoritative (it said "D+5.0pp" beside a 0.5455 / D+9.1 topline).
     text = re.sub(
-        r'(GENERIC_BALLOT_TOPLINE_D_2P\s*[:=]\s*(?:float\s*=\s*)?)[\d.]+',
-        rf'\g<1>{new_topline:.4f}',
+        r'(GENERIC_BALLOT_TOPLINE_D_2P\s*[:=]\s*(?:float\s*=\s*)?)[\d.]+([^\n]*)',
+        rf'\g<1>{new_topline:.4f}  # D{(new_topline - 0.5) * 200:+.1f}pp '
+        rf'(implied by racial shares above)',
         text,
     )
 

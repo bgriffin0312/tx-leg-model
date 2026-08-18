@@ -887,11 +887,20 @@ def main():
                         help="Print summary only, don't write files")
     parser.add_argument("--verbose", action="store_true",
                         help="Print detailed column names and row samples")
+    parser.add_argument("--force-download", action="store_true",
+                        help="Bypass the on-disk TEC cache and re-download "
+                             "(the cache has no TTL; without this a stale "
+                             "tec_*.csv is reused and looks like 'no new IEs')")
     args = parser.parse_args()
+
+    if args.force_download:
+        import collect_finance
+        collect_finance.FORCE_TEC_DOWNLOAD = True
 
     print("=" * 65)
     print("  TX Legislature 2026 — Independent Expenditure Collection")
     print(f"  Cycle window: {CYCLE_START} → {CYCLE_END}")
+    print(f"  TEC cache: {'BYPASSED (--force-download)' if args.force_download else 'enabled'}")
     print("=" * 65)
 
     print("\nReading TEC ZIP central directory...")

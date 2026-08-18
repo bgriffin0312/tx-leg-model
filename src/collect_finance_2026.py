@@ -103,15 +103,40 @@ def load_2026_cover(verbose: bool = False) -> dict:
     rows_kept = 0
     rows_skipped_date = 0
     rows_straddling = 0  # reports where start is outside window but end is inside
+    rows_hold_fallback = 0  # matched via filerHoldOffice* because seek fields were blank
 
     for row in reader:
         seek_office = row.get("filerSeekOfficeCd", "").strip().upper()
+        hold_office_cd = row.get("filerHoldOfficeCd", "").strip().upper()
+        dist_raw = re.sub(r"\D", "", row.get("filerSeekOfficeDistrict", "").strip())
+        hold_dist_raw = re.sub(r"\D", "", row.get("filerHoldOfficeDistrict", "").strip())
+
+        # TEC leaves the *seek* fields blank on many July semi-annual reports
+        # filed by sitting legislators (they file as officeholders, with no
+        # candidacy designated). Keying only on seek fields silently dropped
+        # those reports — 36 reports / $2.7M / 35 districts in the 2026 window,
+        # and it made 5 districts look like they had no filings at all.
+        #
+        # Fall back to the *hold* fields ONLY when seek is entirely blank.
+        # If seek names a DIFFERENT office, the filer is running statewide
+        # (Middleton→ATTYGEN, Hinojosa→GOVERNOR, Goodwin→LTGOVERNOR,
+        # Huffines→COMPTROLLER) and that money must NOT be attributed to the
+        # legislative seat they currently hold — $24M across 12 districts,
+        # including SD 11, which is in the competitive set.
         chamber = OFFICE_CODES.get(seek_office)
         if chamber is None:
-            continue
+            if seek_office:
+                continue  # seeking a different office — not this district's race
+            chamber = OFFICE_CODES.get(hold_office_cd)
+            if chamber is None:
+                continue
+            rows_hold_fallback += 1
 
-        # District
-        dist_raw = re.sub(r"\D", "", row.get("filerSeekOfficeDistrict", "").strip())
+        # District: seek district if present, else the seat they hold.
+        # (A member seeking a different district with a blank seekDist would be
+        # mis-assigned to their current seat; no such case in the 2026 window.)
+        if not dist_raw:
+            dist_raw = hold_dist_raw
         if not dist_raw:
             continue
         district = int(dist_raw)
@@ -164,6 +189,9 @@ def load_2026_cover(verbose: bool = False) -> dict:
         rows_kept += 1
 
     print(f"  2026 cover rows kept: {rows_kept:,}  (skipped {rows_skipped_date:,} outside date window)")
+    if rows_hold_fallback:
+        print(f"  {rows_hold_fallback} report(s) matched via filerHoldOffice* "
+              f"(seek fields blank — officeholder semi-annual filings)")
     if rows_straddling:
         print(f"  NOTE: {rows_straddling} legislative reports straddled the cycle boundary "
               f"(periodEnd in window but periodStart outside). These are excluded; "
@@ -624,11 +652,20 @@ def main():
                         help="Write finance CSV but don't update districts_2026.csv")
     parser.add_argument("--summary", action="store_true",
                         help="Print summary only; don't write any files")
+    parser.add_argument("--force-download", action="store_true",
+                        help="Bypass the on-disk TEC cache and re-download "
+                             "(the cache has no TTL; without this a stale "
+                             "tec_*.csv is reused and looks like 'no new filings')")
     args = parser.parse_args()
+
+    if args.force_download:
+        import collect_finance
+        collect_finance.FORCE_TEC_DOWNLOAD = True
 
     print("=" * 60)
     print("  TX Legislature 2026 — Finance Collection")
     print(f"  Cycle window: {CYCLE_START} → {CYCLE_END}")
+    print(f"  TEC cache: {'BYPASSED (--force-download)' if args.force_download else 'enabled'}")
     print("=" * 60)
     print()
 
