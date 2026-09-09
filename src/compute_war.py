@@ -214,7 +214,17 @@ def load_pres_baseline(chamber: str, election_year: int) -> pd.DataFrame:
     if election_year == 2024:
         path = RAW / f"tx_presidential_{chamber}_2024.csv"
     elif election_year == 2022:
-        path = HIST / f"tx_presidential_{chamber}_2020.csv"
+        # 2020 presidential allocated onto PlanH2316/S2168 SPATIALLY, by
+        # collect_presidential_spatial.py. The old key-join file for these lines
+        # (tx_presidential_{chamber}_2020.csv) is built by matching 2020 returns
+        # against the 2022 precinct file, and precinct keys churned in between:
+        # it carries 148 of 150 House districts, 86% of the statewide vote, HD 65
+        # at zero votes and HD 28/76 at ~7% of a normal electorate.
+        # The spatial build keeps 99.96% of the vote and all 150/31 districts,
+        # and reproduces TLC's own authoritative assignment to within 0.03pp
+        # when both methods are run against 2024 (mean |diff| 0.005pp, n=150).
+        plan = "planh2316" if chamber == "house" else "plans2168"
+        path = HIST / f"tx_presidential_{chamber}_2020_{plan}.csv"
     elif election_year == 2020:
         path = HIST / f"tx_presidential_{chamber}_2020_h2100.csv"
     else:  # 2018 and earlier
