@@ -87,6 +87,8 @@ PLAN_GEO = {
     "H358": (CACHE / "planh358_shapefile.zip", "District", "house", 150),
     "H2100": (CACHE / "planh2100.zip", "District", "house", 150),
     "S172": (CACHE / "plans172_shapefile.zip", "District", "senate", 31),
+    # PLANH309 is the 2012 INTERIM House map, superseded by H358 in 2013.
+    "H309": (CACHE / "planh309_shapefile.zip", "District", "house", 150),
 }
 
 DEM = {2012: ["obama"], 2016: ["clinton"], 2020: ["biden"], 2024: ["harris"]}
