@@ -69,7 +69,10 @@ DATA_HIST = DATA_RAW / "historical"
 DATA_PROC = ROOT / "data" / "processed"
 DATA_PROC.mkdir(parents=True, exist_ok=True)
 
-YEARS = [2002, 2006, 2010, 2014, 2018, 2022]
+# 2012 and 2016 are PRESIDENTIAL years; the original six are every midterm
+# from 2002-2022. Including them changes what the model is trained on, so
+# whether they help is tested rather than assumed (see the refit notes).
+YEARS = [2002, 2006, 2010, 2012, 2014, 2016, 2018, 2022]
 CHAMBERS = ["house", "senate"]
 MAX_DISTRICTS = {"house": 150, "senate": 31}
 
@@ -77,7 +80,9 @@ NATIONAL_ENV = {
     2002: -4.6,   # R+4.6
     2006:  7.9,   # D+7.9
     2010: -6.8,   # R+6.8
+    2012:  1.2,   # D+1.2  (national US House popular vote, 48.8-47.6)
     2014: -5.7,   # R+5.7
+    2016: -1.1,   # R+1.1  (49.1-48.0)
     2018:  8.6,   # D+8.6
     2022: -2.8,   # R+2.8
 }
@@ -141,22 +146,60 @@ def load_governor_data() -> dict:
     return data
 
 
+# Presidential baseline per training cycle: the nearest presidential election,
+# aggregated onto the DISTRICT LINES that cycle was actually run under.
+#
+# The old version loaded the 2024 file and used it as a "static baseline for all
+# years". District numbers are not stable across redistricting, so for every
+# cycle before 2022 this joined an outcome to the wrong geography -- "district
+# 37" in the result and "district 37" in the baseline were different pieces of
+# Texas. It is also future information for every row.
+#
+# Measurement error in the main regressor attenuates its coefficient toward
+# zero, which is why pass-through reads 0.596 when clean cycles give ~0.98.
+#
+# Cycles absent from this map have no reachable baseline: TLC precinct geometry
+# and the RED-365 crosswalks both stop at the 2010 general, so 2000/2004/2008
+# presidential cannot be assigned to districts at all. Those cycles keep the
+# static 2024 fallback and are flagged, not silently mixed in.
+PRES_BASELINE_BY_CYCLE = {
+    (2012, "house"):  "historical/tx_presidential_house_2012_planh309.csv",
+    (2014, "house"):  "historical/tx_presidential_house_2012_planh358.csv",
+    (2014, "senate"): "historical/tx_presidential_senate_2012_plans172.csv",
+    (2016, "house"):  "historical/tx_presidential_house_2016_planh358.csv",
+    (2016, "senate"): "historical/tx_presidential_senate_2016_plans172.csv",
+    (2018, "house"):  "historical/tx_presidential_house_2016.csv",
+    (2018, "senate"): "historical/tx_presidential_senate_2016.csv",
+    (2022, "house"):  "historical/tx_presidential_house_2020_planh2316.csv",
+    (2022, "senate"): "historical/tx_presidential_senate_2020_plans2168.csv",
+}
+
+
 def load_presidential_data() -> dict:
-    """
-    Load 2024 presidential results by district (static baseline for all years).
-    Returns dict keyed (chamber_lower, district_int) → dem_pres_2p_baseline float.
-    """
+    """(year, chamber_lower, district_int) → (baseline, correct_vintage_bool)."""
     data = {}
+    for (year, chamber), rel in PRES_BASELINE_BY_CYCLE.items():
+        path = DATA_RAW / rel
+        if not path.exists():
+            print(f"  WARN missing vintage baseline {rel}")
+            continue
+        with open(path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                val = safe_float(row.get("dem_pres_2p_baseline"))
+                if val is not None:
+                    data[(year, chamber, int(row["district"]))] = (val, True)
+
     for chamber in CHAMBERS:
         path = DATA_RAW / f"tx_presidential_{chamber}_2024.csv"
         if not path.exists():
             continue
         with open(path, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                district = int(row["district"])
-                val = safe_float(row.get("dem_pres_2p_baseline"))
+            static = {int(r["district"]): safe_float(r.get("dem_pres_2p_baseline"))
+                      for r in csv.DictReader(f)}
+        for year in YEARS:
+            for district, val in static.items():
                 if val is not None:
-                    data[(chamber, district)] = val
+                    data.setdefault((year, chamber, district), (val, False))
     return data
 
 
@@ -284,7 +327,8 @@ def build_row(year: int, chamber: str, district: int,
               prior_winner: str | None,
               manual_inc: str | None,
               dem_pres_2p_baseline: float | None = None,
-              ie: dict | None = None) -> dict:
+              ie: dict | None = None,
+              pres_vintage_ok: bool = False) -> dict:
     """
     Construct one analysis-ready row.
     Returns a dict with all output columns.
@@ -296,6 +340,7 @@ def build_row(year: int, chamber: str, district: int,
         "dem_2p_share": None,
         "baseline_partisanship": None,
         "dem_pres_2p_baseline": dem_pres_2p_baseline,
+        "pres_baseline_correct_vintage": 1 if pres_vintage_ok else 0,
         "national_env": NATIONAL_ENV.get(year, 0.0),
         "dem_incumbent": 0,
         "rep_incumbent": 0,
@@ -478,11 +523,14 @@ def build_dataset() -> list[dict]:
                 ie = ie_data.get(key)
                 prior_winner = prior_winners.get(key)
                 manual = manual_inc.get(key)
-                pres_baseline = presidential_data.get((chamber, district))
+                _pb = presidential_data.get((year, chamber, district))
+                pres_baseline = _pb[0] if _pb else None
+                pres_vintage_ok = bool(_pb and _pb[1])
 
                 row = build_row(year, chamber, district,
                                 election, governor, finance,
-                                prior_winner, manual, pres_baseline, ie)
+                                prior_winner, manual, pres_baseline, ie,
+                                pres_vintage_ok=pres_vintage_ok)
                 rows.append(row)
 
     return rows
@@ -491,7 +539,8 @@ def build_dataset() -> list[dict]:
 def write_csv(rows: list[dict], path: Path):
     fields = [
         "year", "chamber", "district",
-        "dem_2p_share", "baseline_partisanship", "dem_pres_2p_baseline", "national_env",
+        "dem_2p_share", "baseline_partisanship", "dem_pres_2p_baseline",
+        "pres_baseline_correct_vintage", "national_env",
         "dem_incumbent", "rep_incumbent", "open_seat",
         "dem_fundraising_share", "log_challenger_fundraising", "challenger_viability_flag",
         "ie_dem_share", "ie_log_total", "ie_flag", "ie_total", "ie_d_favor", "ie_r_favor",
