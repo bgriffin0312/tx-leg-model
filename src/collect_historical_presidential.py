@@ -372,7 +372,8 @@ def classify_candidate(name: str, classifiers: dict) -> str:
 
 def aggregate_presidential(df_elec: pd.DataFrame, df_map: pd.DataFrame,
                             house_col: str, senate_col: str,
-                            pres_year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+                            pres_year: int,
+                            map_year: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Filter presidential rows, join precinct mapping, aggregate by district.
     Mirrors the logic in collect_presidential_by_district.py.
@@ -479,7 +480,8 @@ def aggregate_presidential(df_elec: pd.DataFrame, df_map: pd.DataFrame,
         return agg.sort_values("district").reset_index(drop=True)[cols]
 
     map_info = PRECINCT_MAP_INFO.get(
-        2022 if pres_year == 2020 else 2018, PRECINCT_MAP_INFO[2022])
+        map_year if map_year is not None else (2022 if pres_year == 2020 else 2018),
+        PRECINCT_MAP_INFO[2022])
     house_df = make_district_df(house_col, "house", map_info["n_house"])
     senate_df = make_district_df(senate_col, "senate", map_info["n_senate"])
     return house_df, senate_df
@@ -513,13 +515,29 @@ def validate_statewide(house_df: pd.DataFrame, pres_year: int):
 # Main
 # ---------------------------------------------------------------------------
 
-def collect_pres_year(pres_year: int, force: bool = False):
+def collect_pres_year(pres_year: int, force: bool = False,
+                      map_year: int | None = None):
     """
     Collect presidential results for one presidential year and write output CSVs.
+
+    `map_year` picks the district vintage. The default pairs 2020 presidential
+    with the 2022 map (PlanH2316) and 2016 with the 2020G map (PlanH2100).
+
+    That default is right for scoring 2022 races and wrong for scoring 2018 and
+    2020 ones, which ran under PlanH2100 — and it is also why the default 2020
+    file loses ~15% of the statewide vote: 2020 precincts that no longer existed
+    in 2022 have nothing to join to. Passing map_year=2018 for pres_year=2020
+    fixes the geography and recovers the votes in the same move; the output is
+    written with an `_h2100` suffix so it sits alongside the default file rather
+    than overwriting a baseline that 2022 races legitimately want.
     """
-    map_year = 2022 if pres_year == 2020 else 2018
+    if map_year is None:
+        map_year = 2022 if pres_year == 2020 else 2018
     map_info = PRECINCT_MAP_INFO[map_year]
     map_filename = map_info["filename"]
+    # Suffix only when this is not the default pairing for this pres_year.
+    default_map_year = 2022 if pres_year == 2020 else 2018
+    out_suffix = "" if map_year == default_map_year else f"_{map_info['house_col'][4:].lower()}"
 
     print(f"\n{'='*60}")
     print(f"{pres_year} Presidential Results → {map_year} District Boundaries")
@@ -574,7 +592,7 @@ def collect_pres_year(pres_year: int, force: bool = False):
     # Step 4: Aggregate
     print(f"\nStep 4: Aggregate presidential votes by district")
     house_df, senate_df = aggregate_presidential(
-        df_elec, df_map, house_col, senate_col, pres_year)
+        df_elec, df_map, house_col, senate_col, pres_year, map_year)
 
     if house_df is not None:
         print(f"  House: {len(house_df)} / {map_info['n_house']} districts")
@@ -600,12 +618,12 @@ def collect_pres_year(pres_year: int, force: bool = False):
     # Step 5: Write output
     print(f"\nStep 5: Write output")
     if house_df is not None:
-        out_house = DATA_HIST / f"tx_presidential_house_{pres_year}.csv"
+        out_house = DATA_HIST / f"tx_presidential_house_{pres_year}{out_suffix}.csv"
         house_df.to_csv(out_house, index=False)
         print(f"  Wrote {out_house.name} ({len(house_df)} rows)")
 
     if senate_df is not None:
-        out_senate = DATA_HIST / f"tx_presidential_senate_{pres_year}.csv"
+        out_senate = DATA_HIST / f"tx_presidential_senate_{pres_year}{out_suffix}.csv"
         senate_df.to_csv(out_senate, index=False)
         print(f"  Wrote {out_senate.name} ({len(senate_df)} rows)")
 
@@ -618,6 +636,12 @@ def main():
     parser.add_argument("--pres-year", type=int, choices=[2020, 2016],
                         help="Presidential year to collect (2020 or 2016). Default: both")
     parser.add_argument("--no-cache", action="store_true", help="Force re-download")
+    parser.add_argument("--map-year", type=int, choices=[2018, 2022], default=None,
+                        help="District vintage to map onto: 2018 => PlanH2100/S2100 "
+                             "(the lines 2016/2018/2020 races ran under), 2022 => "
+                             "PlanH2316/S2168 (2022/2024/2026). Defaults to the "
+                             "historical pairing; a non-default choice writes to a "
+                             "suffixed file so the default output is preserved.")
     args = parser.parse_args()
 
     years = [args.pres_year] if args.pres_year else [2020, 2016]
@@ -628,15 +652,16 @@ def main():
 
     results = {}
     for pres_year in years:
-        ok = collect_pres_year(pres_year, force=args.no_cache)
+        ok = collect_pres_year(pres_year, force=args.no_cache, map_year=args.map_year)
         results[pres_year] = ok
 
     print(f"\n{'='*60}")
     print("Summary:")
     for year, ok in results.items():
         status = "OK" if ok else "FAILED — manual download needed"
-        map_year = 2022 if year == 2020 else 2018
-        print(f"  {year} presidential → {map_year} districts: {status}")
+        used_map_year = args.map_year or (2022 if year == 2020 else 2018)
+        plan = PRECINCT_MAP_INFO[used_map_year]["house_col"]
+        print(f"  {year} presidential → {used_map_year} districts ({plan}): {status}")
 
     if not all(results.values()):
         print("\nFor failed years, download the ZIP manually from:")

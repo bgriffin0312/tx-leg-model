@@ -187,15 +187,43 @@ def _build_incumbency_from_prior(prior_year: int) -> pd.DataFrame:
 
 def load_pres_baseline(chamber: str, election_year: int) -> pd.DataFrame:
     """
-    dem_pres_2p_baseline per district, using the most appropriate presidential cycle:
-      2024 election → 2024 presidential results (exact match)
-      2022 election → 2020 presidential results (contemporaneous)
-      2018 election → 2020 presidential results (closest available; 2016 not on hand)
+    dem_pres_2p_baseline per district, matched to the DISTRICT LINES the race was
+    actually run under, and then to the nearest presidential cycle:
+
+      2024 election → 2024 presidential          (PlanH2316, exact)
+      2022 election → 2020 presidential          (PlanH2316, contemporaneous)
+      2020 election → 2020 presidential _h2100   (PlanH2100, exact)
+      2018 election → 2016 presidential          (PlanH2100, contemporaneous)
+
+    Every race before 2022 ran under PlanH2100/S2100, 2022 onward under
+    PlanH2316/S2168. The previous version sent everything except 2024 to the
+    2020 file, which is built on PlanH2316 — so 2018 and 2020 races were scored
+    against districts that did not exist when they were run, and "district 37"
+    meant different geography on each side of the join.
+
+    The old docstring also said "2016 not on hand". It has been on disk since
+    April, on the correct lines, and correlates with actual 2018 House results
+    at 0.991 versus 0.897 for the file that was being used instead.
+
+    The _h2100 build of 2020 is not a second-best substitute — mapping 2020
+    returns onto 2020-era precincts joins at 100%, where the PlanH2316 build
+    silently drops ~15% of the statewide vote and two whole districts. Rebuild
+    it with:
+        python src/collect_historical_presidential.py --pres-year 2020 --map-year 2018
     """
     if election_year == 2024:
         path = RAW / f"tx_presidential_{chamber}_2024.csv"
-    else:
+    elif election_year == 2022:
         path = HIST / f"tx_presidential_{chamber}_2020.csv"
+    elif election_year == 2020:
+        path = HIST / f"tx_presidential_{chamber}_2020_h2100.csv"
+    else:  # 2018 and earlier
+        path = HIST / f"tx_presidential_{chamber}_2016.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no presidential baseline for {election_year} {chamber}: {path}. "
+            f"Silently falling back to the wrong vintage is how this bug started."
+        )
     df = pd.read_csv(path)[["district", "dem_pres_2p_baseline"]].copy()
     df["district"] = df["district"].astype(int)
     return df
