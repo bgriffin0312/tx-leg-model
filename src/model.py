@@ -297,10 +297,18 @@ def compute_demo_baseline(df: pd.DataFrame,
 
 
 def _safe_pct(val) -> float:
-    """Convert a percentage string/float to a 0-1 fraction safely."""
+    """Convert a CVAP percentage to a 0-1 fraction.
+
+    The old body guessed the units -- `v / 100.0 if v > 1.0 else v` -- which is
+    right for 71.2 and for 0.712, and wrong for every genuine sub-1% group. The
+    CVAP file is uniformly in percent (five groups sum to ~100; smallest value
+    0.09), so 17 rows had a group under 1.0 read as a whole percentage: HD 40's
+    0.78% Black CVAP became 78%, HD 34's 0.92% "other" became 92%.
+
+    There is nothing to detect. Divide.
+    """
     try:
-        v = float(val)
-        return v / 100.0 if v > 1.0 else v  # handle both 71.2 and 0.712
+        return float(val) / 100.0
     except (TypeError, ValueError):
         return 0.0
 
