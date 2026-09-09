@@ -63,6 +63,27 @@ def clean_candidate_name(raw: str) -> str:
     return name.strip()
 
 
+def parse_votes(raw: str | None) -> int | None:
+    """Parse a vote count, tolerating either separator between thousands groups.
+
+    Wikipedia is hand-edited and sometimes carries a period where a comma
+    belongs. The 2024 House article gives Mark Dorazio (HD 122) as "64.018" and
+    Jennifer Lee (HD 55) as "29.269". The old pattern matched [\\d,]+ only, so it
+    captured "64" and stopped at the period -- a 1000x undercount that silently
+    inverted HD 122's recorded winner, because the winner was derived from votes.
+
+    Vote totals are integers, so any '.' or ',' separating 3-digit groups is a
+    thousands separator and never a decimal point. Anything that does not fit
+    that shape returns None rather than a wrong number.
+    """
+    if raw is None:
+        return None
+    s = raw.strip().rstrip(".,")
+    if not s or not re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+|\d+", s):
+        return None
+    return int(re.sub(r"[.,]", "", s))
+
+
 def parse_election_box(block: str) -> list[dict]:
     """
     Parse candidates from one {{Election box begin}}...{{Election box end}} block.
@@ -82,7 +103,7 @@ def parse_election_box(block: str) -> list[dict]:
         part_norm = part.replace("|", "\n|")
         party_m = re.search(r'\|\s*party\s*=\s*([^\n|]+)', part_norm)
         cand_m = re.search(r'\|\s*candidate\s*=\s*([^\n|}\]]+(?:\[\[[^\]]*\][^\n|}]*)?[^\n|}]*)', part_norm)
-        votes_m = re.search(r'\|\s*votes\s*=\s*([\d,]+)', part_norm)
+        votes_m = re.search(r'\|\s*votes\s*=\s*([\d.,]+)', part_norm)
         pct_m = re.search(r'\|\s*percentage\s*=\s*([\d.]+)', part_norm)
 
         if not (party_m and pct_m):
@@ -92,7 +113,7 @@ def parse_election_box(block: str) -> list[dict]:
         party = PARTY_MAP.get(party_raw, "?")
 
         cand = clean_candidate_name(cand_m.group(1)) if cand_m else ""
-        votes = int(votes_m.group(1).replace(",", "")) if votes_m else None
+        votes = parse_votes(votes_m.group(1)) if votes_m else None
         pct = float(pct_m.group(1))
 
         candidates.append({"party": party, "candidate": cand, "votes": votes, "pct": pct})
@@ -166,11 +187,30 @@ def parse_district(wikitext: str, district: int) -> dict:
     d_has = row["d_pct"] is not None
     if r_has and d_has:
         row["contested"] = True
-        # Prefer votes for winner; fall back to pct
+        # Percentages decide the winner, not votes. Votes are the field that gets
+        # typo'd upstream (see parse_votes); when HD 122's count was mangled in
+        # 2024 the percentages in the very same table were correct, and deriving
+        # the winner from votes recorded a Republican hold as a Democratic one.
+        row["winner_party"] = "R" if row["r_pct"] > row["d_pct"] else "D"
+        # Votes still get to speak: if they contradict the percentages, or imply
+        # a materially different share, say so rather than swallowing it.
+        # Compare TWO-PARTY shares on both sides. r_pct is a share of the total
+        # vote, so in a race with a Libertarian on the ballot it is several
+        # points below the two-party share the vote counts imply -- comparing
+        # the two directly flagged five clean three-way races on the first run.
+        flags = []
         if row["r_votes"] is not None and row["d_votes"] is not None:
-            row["winner_party"] = "R" if row["r_votes"] > row["d_votes"] else "D"
-        else:
-            row["winner_party"] = "R" if row["r_pct"] > row["d_pct"] else "D"
+            if ("R" if row["r_votes"] > row["d_votes"] else "D") != row["winner_party"]:
+                flags.append("votes_pct_disagree")
+            vote_total = row["r_votes"] + row["d_votes"]
+            pct_total = row["r_pct"] + row["d_pct"]
+            if vote_total and pct_total:
+                votes_2p = row["r_votes"] / vote_total * 100
+                pct_2p = row["r_pct"] / pct_total * 100
+                if abs(votes_2p - pct_2p) > 1.0:
+                    flags.append("votes_pct_share_mismatch")
+        if flags:
+            row["notes"] = ";".join(flags)
     elif r_has:
         row["winner_party"] = "R"
         row["notes"] = "uncontested_R"
@@ -224,6 +264,23 @@ def summarize(rows: list[dict], label: str):
         print(f"  Blank R names ({len(blank_r)}): {[r['district'] for r in blank_r]}")
     if blank_d:
         print(f"  Blank D names ({len(blank_d)}): {[r['district'] for r in blank_d]}")
+
+    # A mangled vote count is invisible unless something says so out loud. These
+    # rows parsed fine and are still wrong on votes; the winner is taken from the
+    # percentages, so the forecast is safe, but the counts should not be trusted.
+    suspect = [r for r in rows if "votes_pct" in (r["notes"] or "")]
+    if suspect:
+        print(f"  !! Vote counts contradict percentages ({len(suspect)}) - "
+              f"winner taken from pct; check the source article:")
+        for r in suspect:
+            print(f"       HD {r['district']}: {r['r_candidate']} R {r['r_votes']} "
+                  f"({r['r_pct']}%) vs {r['d_candidate']} D {r['d_votes']} "
+                  f"({r['d_pct']}%)  [{r['notes']}]")
+    missing_votes = [r for r in rows if r["contested"]
+                     and (r["r_votes"] is None or r["d_votes"] is None)]
+    if missing_votes:
+        print(f"  Contested rows with an unparseable vote count "
+              f"({len(missing_votes)}): {[r['district'] for r in missing_votes]}")
 
 
 SENATE_2022_XML = DATA_RAW / "_wiki_senate_2022_raw.xml"
