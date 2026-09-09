@@ -47,6 +47,7 @@ USAGE:
 
 import json
 import re
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -102,11 +103,69 @@ def normalize_name(name) -> str:
     if not isinstance(name, str) or not name.strip() or name.strip().lower() in ("nan", "none", "n/a", "—"):
         return ""
     n = name.lower()
+    # Results are scraped from Wikipedia, which disambiguates same-named
+    # articles: "Phil King (Texas politician)", "Terry Wilson (politician)".
+    # _STRIP only removes the brackets, leaving the words behind, so these
+    # became separate candidate identities from their own earlier races -- 8 of
+    # 591 rows -- and broke incumbency matching for the members they name.
+    n = re.sub(r"\([^)]*\)", " ", n)
+    # Fold accents rather than deleting them. _STRIP removes anything outside
+    # [a-z ], so "González" became "gonzlez" and "Muñoz" became "muoz" -- which
+    # matches neither the accented nor the unaccented spelling of the same
+    # member, splitting their identity and breaking incumbency matching.
+    n = "".join(c for c in unicodedata.normalize("NFKD", n)
+                if not unicodedata.combining(c))
     n = n.replace("-", " ")  # hyphenated surnames match their spaced form
     n = _SUFFIXES.sub("", n)
     n = _STRIP.sub("", n)
     n = " ".join(n.split())
     return NAME_CANONICAL.get(n, n)
+
+
+# Familiar first names that are not prefixes of their formal form, so the
+# prefix rule in _same_person cannot reach them.
+_NICKNAMES = frozenset(frozenset(p) for p in [
+    ("joe", "joseph"), ("bob", "robert"), ("bill", "william"),
+    ("mike", "michael"), ("dick", "richard"), ("rick", "richard"),
+    ("jim", "james"), ("jack", "john"), ("chuck", "charles"),
+    ("tony", "anthony"), ("ted", "edward"), ("ted", "theodore"),
+    ("hank", "henry"), ("beto", "robert"), ("gene", "eugene"),
+    ("peggy", "margaret"), ("betty", "elizabeth"), ("liz", "elizabeth"),
+    ("kathy", "katherine"), ("cathy", "catherine"), ("sue", "susan"),
+    ("trey", "robert"), ("buddy", "james"),
+])
+
+
+def _same_person(a, b) -> bool:
+    """Is this the same member, allowing for how ballot names drift?
+
+    Exact normalised equality is too strict across cycles: the same person
+    appears as "John N. Raney" and "John Raney", "Todd Ames Hunter" and "Todd
+    Hunter", "Richard Pena Raymond" and "Richard Raymond". Middle names and
+    initials come and go. First and last token together are stable, and a
+    first+last collision inside one district across two cycles is not a real
+    risk.
+    """
+    na, nb = normalize_name(a), normalize_name(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    ta, tb = na.split(), nb.split()
+    if not ta or not tb or ta[-1] != tb[-1]:
+        return False
+    if ta[0] == tb[0]:
+        return True
+    # Formal vs familiar first name, same surname, same seat, same party.
+    # Two shapes. Truncations ("Dan"/"Daniel", "Chris"/"Christopher") are a
+    # prefix; require 3 chars so this cannot collapse two different members.
+    short, long_ = sorted((ta[0], tb[0]), key=len)
+    if len(short) >= 3 and long_.startswith(short):
+        return True
+    # Substitutions are not prefixes at all -- "Joe" is not the start of
+    # "Joseph" (j-o-s), nor Bob of Robert, nor Mike of Michael. HD 78's Joe
+    # Moody / Joseph Moody is a live case.
+    return frozenset((short, long_)) in _NICKNAMES
 
 
 # ---------------------------------------------------------------------------
@@ -150,33 +209,77 @@ def load_results(year: int, chamber: str) -> pd.DataFrame:
 
 def build_incumbency_2024() -> pd.DataFrame:
     """
-    2024 incumbency = 2022 winners (plus known special-election changes).
+    2024 incumbency = 2022 winners who are on the 2024 ballot themselves.
     Returns DataFrame with columns: chamber, district, dem_incumbent, rep_incumbent.
     """
-    return _build_incumbency_from_prior(prior_year=2022)
+    return _build_incumbency_from_prior(prior_year=2022, current_year=2024)
 
 
 def build_incumbency_2020() -> pd.DataFrame:
     """
-    2020 incumbency = 2018 winners (House: exact; Senate: imperfect because
-    half the seats were last contested in 2016, which we don't have data for).
+    2020 incumbency = 2018 winners who are on the 2020 ballot themselves.
+
+    Senate is structurally incomplete: half the seats were last contested in
+    2016, so those districts have no 2018 row to match against and fall through
+    as non-incumbent. Every one of the 13 Senate seats up in 2020 lands that
+    way. Name matching does not cause that -- the prior-cycle data simply is
+    not there -- but it is worth knowing that Senate 2020 WAR carries no
+    incumbency term at all.
     """
-    return _build_incumbency_from_prior(prior_year=2018)
+    return _build_incumbency_from_prior(prior_year=2018, current_year=2020)
 
 
-def _build_incumbency_from_prior(prior_year: int) -> pd.DataFrame:
+def _build_incumbency_from_prior(prior_year: int, current_year: int) -> pd.DataFrame:
+    """Incumbency for `current_year`, from who actually won `prior_year`.
+
+    This used to read the prior cycle's winner_party alone:
+
+        dem_incumbent = (winner_party == "D")
+
+    with no check that the prior winner is the person on this ballot. So a seat
+    whose member retired, lost a primary or left mid-cycle was still scored as
+    though an incumbent were defending it, and the freshman who won that open
+    seat absorbed an incumbency coefficient they never had (-8.0pp for an R,
+    +6.8pp for a D). 36 races carried a phantom incumbent -- 24 in 2024, 12 in
+    2020 -- and it fell hardest on exactly the competitive open seats:
+    Marc LaHood HD-121 and Hillary Hickland HD-55 both had their WAR deflated
+    by roughly 8pp, which is enough to move a rating.
+
+    A seat is now incumbent-held only if the prior winner's NAME matches the
+    candidate of that party on the current ballot.
+
+    KNOWN LIMIT: this sees only prior GENERAL results, so a member who took the
+    seat in a special election reads as a non-incumbent in their first general
+    (Brent Money HD-2, Christina Morales HD-145 2020, Eckhardt SD-14, Cook
+    SD-15). That is the same treatment the model already gives SD-9, none of
+    the four is in a competitive 2026 seat, and it is the conservative
+    direction: it withholds a credit rather than inventing one.
+    """
     rows = []
     for ch in ["house", "senate"]:
-        df = load_results(prior_year, ch)
-        for _, r in df.iterrows():
+        prior = load_results(prior_year, ch)
+        current = load_results(current_year, ch)
+        cur_by_district = {int(r["district"]): r for _, r in current.iterrows()}
+
+        for _, r in prior.iterrows():
             if not r.get("on_ballot", r.get("contested", False)):
                 continue
+            district = int(r["district"])
             wp = str(r.get("winner_party", "")).strip().upper()
+            # Who actually won that seat, by name.
+            winner_name = r.get("r_candidate") if wp == "R" else r.get("d_candidate")
+            cur = cur_by_district.get(district)
+            same_r = same_d = False
+            if cur is not None and normalize_name(winner_name):
+                if wp == "R":
+                    same_r = _same_person(cur.get("r_candidate"), winner_name)
+                elif wp == "D":
+                    same_d = _same_person(cur.get("d_candidate"), winner_name)
             rows.append({
                 "chamber": ch.capitalize(),
-                "district": int(r["district"]),
-                "dem_incumbent": wp == "D",
-                "rep_incumbent": wp == "R",
+                "district": district,
+                "dem_incumbent": same_d,
+                "rep_incumbent": same_r,
             })
     return pd.DataFrame(rows)
 
