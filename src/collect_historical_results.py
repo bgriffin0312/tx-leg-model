@@ -48,14 +48,22 @@ WIKI_PAGES = {
     ("house", 2022): "2022 Texas House of Representatives election",
     ("house", 2020): "2020 Texas House of Representatives election",
     ("house", 2018): "2018 Texas House of Representatives election",
+    # 2016 and 2012 were never collected: the project sampled every FOURTH year
+    # (2002/2006/2010/2014/2018/2022), which halves the cycles available to WAR
+    # for no reason but the original cadence. Titles verified against the
+    # Wikipedia API; same singular-"election" convention as the rest.
+    ("house", 2016): "2016 Texas House of Representatives election",
     ("house", 2014): "2014 Texas House of Representatives election",
+    ("house", 2012): "2012 Texas House of Representatives election",
     ("house", 2010): "2010 Texas House of Representatives election",
     ("house", 2006): "2006 Texas House of Representatives election",
     ("house", 2002): "2002 Texas House of Representatives election",
     ("senate", 2022): "2022 Texas Senate election",
     ("senate", 2020): "2020 Texas Senate election",
     ("senate", 2018): "2018 Texas Senate election",
+    ("senate", 2016): "2016 Texas Senate election",
     ("senate", 2014): "2014 Texas Senate election",
+    ("senate", 2012): "2012 Texas Senate election",
     ("senate", 2010): "2010 Texas Senate election",
     ("senate", 2006): "2006 Texas Senate election",
     ("senate", 2002): "2002 Texas Senate election",
@@ -492,10 +500,20 @@ def parse_results_table(wikitext: str) -> dict[int, dict]:
     if not table_text:
         for table_m in re.finditer(r'\{\|.*?\|\}', wikitext, re.DOTALL):
             tbl = table_m.group()
-            if (re.search(r'!\s*(?:rowspan[^|]*\|)?\s*District', tbl, re.I)
-                    and re.search(r'!\s*(?:colspan[^|]*\|)?\s*Democratic', tbl, re.I)
-                    and re.search(r'!\s*(?:colspan[^|]*\|)?\s*Republican', tbl, re.I)
-                    and re.search(r'!\s*(?:rowspan[^|]*\|)?\s*Result', tbl, re.I)):
+            # Look at the header CELLS as a body of text rather than demanding a
+            # fixed shape after the '!'. The old patterns required the word to
+            # follow '!' with at most a "rowspan=N|" between, which the 2016
+            # House article defeats twice over: it writes
+            #     ! scope=col rowspan=3|District
+            # and wikilinks the party names,
+            #     ! scope=col colspan=2|[[Texas Democratic Party|Democratic]]
+            # so all 150 districts silently produced nothing.
+            header = "\n".join(l for l in tbl.splitlines() if l.lstrip().startswith("!"))
+            if not header:
+                continue
+            if all(re.search(w, header, re.I)
+                   for w in (r"\bDistrict\b", r"\bDemocratic\b",
+                             r"\bRepublican\b", r"\bResult\b")):
                 table_text = tbl
                 break
 
@@ -524,15 +542,25 @@ def parse_results_table(wikitext: str) -> dict[int, dict]:
             continue
         district = int(dist_m.group(1))
 
-        # Extract data cells: strip leading pipes and markup
-        cells = []
-        for line in lines[1:]:  # skip the district-name line
-            # Remove leading pipe(s) and alignment markup
-            cell = re.sub(r'^\|+\s*(?:align="[^"]*"\s*\|)?\s*', '', line)
-            # Strip bold markup, % sign
-            cell = re.sub(r"'''", '', cell)
-            cell = cell.strip()
-            cells.append(cell)
+        # Extract data cells. Two wikitable dialects appear across these
+        # articles and only one was handled:
+        #   multi-line  -- one cell per line, cell text after a leading '|'
+        #   inline      -- the whole row on ONE line, cells separated by '||'
+        # 2016 uses the inline form, so lines[1:] was empty, cells came out
+        # empty, and every one of the 150 districts fell through the
+        # len(cells) < 4 guard without a word.
+        def clean_cell(raw: str) -> str:
+            c = re.sub(r'^\|+\s*', '', raw)
+            c = re.sub(r'^\s*(?:align\s*=\s*"?[^"|]*"?\s*\|)\s*', '', c)
+            c = re.sub(r'\{\{[^}]*\}\}', '', c)          # shading templates
+            c = re.sub(r"'''", '', c)
+            return c.strip()
+
+        if "||" in district_line:
+            parts = district_line.split("||")
+            cells = [clean_cell(p) for p in parts[1:]]   # [0] is the district name
+        else:
+            cells = [clean_cell(line) for line in lines[1:]]
 
         def parse_pct(val: str) -> float | None:
             val = val.replace('%', '').replace(',', '').strip()
@@ -700,7 +728,7 @@ def summarize(rows: list[dict], label: str):
 # Main
 # ---------------------------------------------------------------------------
 
-YEARS = [2002, 2006, 2010, 2014, 2018, 2020, 2022]
+YEARS = [2002, 2006, 2010, 2012, 2014, 2016, 2018, 2020, 2022]
 CHAMBERS = ["house", "senate"]
 
 

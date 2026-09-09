@@ -52,7 +52,13 @@ CACHE = RAW / "_capitol_data_cache"
 GEO = RAW / "geo"
 
 # Precinct geometry published by TLC, one file per general election.
+# HOW FAR BACK THIS CAN GO: geometry stops at 2010 (dataset archived_vtds_2010s)
+# and so do the RED-365 precinct-to-district crosswalks. Returns go back to 1996,
+# but a precinct with no district assignment and no polygon cannot be placed, so
+# 2000/2004/2008 presidential -- and therefore the 2002/2006/2010 training
+# cycles -- are not reachable from this source at any effort.
 PRECINCT_GEO = {
+    2012: "precincts12g_2012.zip",
     2016: "precincts16g_2016.zip",
     2020: "precincts20g_2020.zip",
     2022: "precincts22g.zip",
@@ -63,21 +69,34 @@ PRECINCT_GEO = {
 RETURNS_ZIP = "{year}-general-vtds-election-data.zip"
 RETURNS_CSV = "{year}_General_Election_Returns.csv"
 
+# Pre-2016 returns live in one FTP archive that carries 1996-2014 together.
+FTP_ARCHIVE = "ftp_election_data_12g.zip"
+FTP_YEARS = {2012}
+
 # Target plans and where their district geometry lives. The .gpkg files are
 # Census TIGER and carry the CURRENT (post-2021) legislative districts, which
 # are PlanH2316 / PlanS2168.
+# A plan is either a local .gpkg (Census TIGER, current districts) or a TLC
+# plan shapefile zip. PLANH358 and PLANH2100 are NOT interchangeable: they are
+# the same map except for the 2017 court remedy, which redrew HD 90 (max
+# relative area difference between them is 1.57%, and it is HD 90). 2014 and
+# 2016 ran under H358; 2018 and 2020 under H2100.
 PLAN_GEO = {
     "H2316": (GEO / "tx_house_districts.gpkg", "SLDLST", "house", 150),
     "S2168": (GEO / "tx_senate_districts.gpkg", "SLDUST", "senate", 31),
+    "H358": (CACHE / "planh358_shapefile.zip", "District", "house", 150),
+    "H2100": (CACHE / "planh2100.zip", "District", "house", 150),
+    "S172": (CACHE / "plans172_shapefile.zip", "District", "senate", 31),
 }
 
-DEM = {2016: ["clinton"], 2020: ["biden"], 2024: ["harris"]}
-REP = {2016: ["trump"], 2020: ["trump"], 2024: ["trump"]}
+DEM = {2012: ["obama"], 2016: ["clinton"], 2020: ["biden"], 2024: ["harris"]}
+REP = {2012: ["romney"], 2016: ["trump"], 2020: ["trump"], 2024: ["trump"]}
 
 
 def load_returns(year: int) -> pd.DataFrame:
     """Presidential votes by precinct key, from the cached comprehensive zip."""
-    zpath = CACHE / RETURNS_ZIP.format(year=year)
+    zpath = CACHE / (FTP_ARCHIVE if year in FTP_YEARS
+                     else RETURNS_ZIP.format(year=year))
     if not zpath.exists():
         sys.exit(f"missing returns zip: {zpath}")
     with zipfile.ZipFile(zpath) as zf:
@@ -213,7 +232,12 @@ def main():
         sys.exit("key join lost >1% of the vote — refusing to continue")
 
     print("Step 3: districts")
-    dg = gpd.read_file(gpkg)
+    if str(gpkg).lower().endswith(".zip"):
+        with zipfile.ZipFile(gpkg) as zf:
+            shp = next(n for n in zf.namelist() if n.lower().endswith(".shp"))
+        dg = gpd.read_file(f"zip://{gpkg}!{shp}")
+    else:
+        dg = gpd.read_file(gpkg)
     print(f"  {len(dg)} districts from {gpkg.name}")
 
     print("Step 4: area-weighted allocation")
