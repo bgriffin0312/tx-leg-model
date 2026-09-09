@@ -106,23 +106,51 @@ REGRESSION_COEFFICIENTS: dict[str, float] = {
     # the new fit uses corrected labels. Previous values: intercept 0.1520,
     # pass-through 0.6604, dem_inc 0.0600, rep_inc −0.0739, senate −0.0261,
     # viability 0.0393, share 0.0624, sigma 0.0785.
-    "intercept":                  0.1781,
-    "dem_pres_2p_baseline":       0.5962,
-    "dem_incumbent":              0.0676,
-    "rep_incumbent":             -0.0804,
-    "chamber_senate":            -0.0263,
+    # REFIT 2026-09-09 on CLEAN-VINTAGE MIDTERM cycles only (2014/2018/2022,
+    # n=208, R2=0.9802, in-sample residual 0.0230).
+    #
+    # The previous values were fit on six cycles that all used the 2024
+    # presidential result as their baseline. District numbers are not stable
+    # across redistricting, so five of the six carried a baseline for the wrong
+    # geography. Measurement error in the main regressor attenuates its
+    # coefficient toward zero: that alone explains pass-through reading 0.5962
+    # where clean cycles give ~0.98, with the intercept inflated to compensate.
+    #
+    # Old and new agree at the centre and diverge at the tails, where the old
+    # fit pulled safe seats toward the middle. A 50%-Harris open seat: 0.4762
+    # old vs 0.4686 new. A 0.35 baseline: 0.3868 old vs 0.3206 new.
+    #
+    # rep_incumbent is shipped as fitted (+0.0078, p=0.155) rather than zeroed.
+    # It is NOT a claim that Republican incumbency helps Democrats -- with a
+    # near-perfect baseline there is nothing left for it to explain, and at
+    # 0.8pp it is noise around zero whichever way it is set.
+    "intercept":                 -0.0322,
+    "dem_pres_2p_baseline":       0.9759,
+    "dem_incumbent":              0.0394,
+    "rep_incumbent":              0.0078,
+    "chamber_senate":             0.0069,
     # national_env: auto-selected based on FINANCE_DATA_THROUGH (see below).
-    # Pre-July: 0.0049 (with_pres model, less suppressed by finance collinearity)
-    # Post-July: 0.0025 (full model, when dem_fundraising_share is fully populated)
+    # Both branches refit on the clean midterms; the old gap between them was
+    # mostly sample composition, and it largely closes once the baseline is
+    # right (full 0.0036 vs with_pres 0.0033).
     "national_env":               None,  # set automatically by _auto_select_env_coef()
-    "challenger_viability_flag":  0.0446,
-    # dem_fundraising_share: D raised / (D+R raised). From full model = +0.0731 per unit (0–1).
-    # NOTE: This coefficient is temporally unstable — early cycles (2002–2010): +0.22,
-    # late cycles (2014–2022): ~0.00. The full-model average is used here.
-    # Pre-primary party assignment is approximate (challenger_raised may include
-    # same-party primary opponents). Treat with caution until post-July TEC data.
-    "dem_fundraising_share":      0.0731,
-    "sigma":                      0.0742,  # residual SE from FULL model (for win probability CDF)
+    # Both finance terms are now statistically indistinguishable from zero on
+    # clean cycles (viability p=0.798, share p=0.208). The old +0.0731 share
+    # coefficient was carried by early cycles where the "effect" was really a
+    # TEC name-match artifact -- 143 of 268 training rows had the share pinned
+    # at exactly 0 or 1, and in 53 of them the $0 side was the sitting
+    # incumbent. Shipped as fitted; they now move a district by tenths of a pp.
+    "challenger_viability_flag":  0.0015,
+    "dem_fundraising_share":      0.0057,
+    # FORECAST sigma, not the in-sample residual (0.0230). In-sample residual
+    # excludes cross-cycle level uncertainty, which is most of the real error.
+    # From leave-one-cycle-out over the five clean cycles (2012-2022):
+    #     sigma_national (RMS of held-out cycle level shifts) 0.0339
+    #     sigma_idio     (pooled within-cycle sd)             0.0280
+    #     total sqrt(n^2 + i^2)                               0.0440
+    # That decomposition also validates the "high-corr" 58% variance share
+    # model.py has been using: the evidence puts it at 59%.
+    "sigma":                      0.0440,
 }
 
 # ---------------------------------------------------------------------------
@@ -222,8 +250,41 @@ FINANCE_CUTOFF_POSTPRIMARY = "20260815"  # include all reports filed through tod
 # Set NATIONAL_ENV_COEF_OVERRIDE to force a specific value (bypasses auto).
 NATIONAL_ENV_COEF_OVERRIDE: float | None = None
 
-_ENV_COEF_WITH_PRES = 0.0049   # less suppressed by finance collinearity (2026-07-20 refit; was 0.0052)
-_ENV_COEF_FULL_MODEL = 0.0025  # full model with finance vars active (2026-07-20 refit; was 0.0027)
+# ---------------------------------------------------------------------------
+# No-finance coefficients, for the WAR baseline
+# ---------------------------------------------------------------------------
+# WAR is a residual against what a replacement-level candidate would do, so its
+# baseline must exclude the finance terms -- a candidate's own fundraising is
+# part of the quality being measured.
+#
+# compute_war used to take REGRESSION_COEFFICIENTS and simply drop the finance
+# regressors while KEEPING the intercept. An intercept is not a constant of
+# nature; it is whatever made the fitted line pass through the data GIVEN the
+# other terms. Removing regressors without refitting left the baseline biased,
+# and the bias landed on candidates: mean residual was +2.34pp instead of 0.
+# Because party_sign flips WAR for Republicans, a uniform positive residual
+# became a pro-D thumb on the scale across 110 of 166 districts.
+#
+# These are a genuine no-finance fit (with_pres) on the same clean-vintage
+# midterms, n=259, R2=0.9766, in-sample residual 0.0255. Residuals are
+# mean-zero by construction, which is the property WAR actually needs and the
+# reason a refit is right where per-run demeaning is a patch: swapping one
+# input file moved the old mean by half a point.
+REGRESSION_COEFFICIENTS_NO_FINANCE: dict[str, float] = {
+    "intercept":            -0.0245,
+    "dem_pres_2p_baseline":  0.9861,
+    "dem_incumbent":         0.0349,
+    "rep_incumbent":         0.0064,
+    "chamber_senate":        0.0072,
+    "national_env":          0.0033,
+    "sigma":                 0.0255,
+}
+
+# Refit 2026-09-09 on clean-vintage midterms. The old gap between these two
+# (0.0049 vs 0.0025) was largely sample composition rather than collinearity,
+# and it nearly closes once the presidential baseline is on the right lines.
+_ENV_COEF_WITH_PRES = 0.0033   # with_pres, clean midterms n=259 (was 0.0049)
+_ENV_COEF_FULL_MODEL = 0.0036  # full model, clean midterms n=208 (was 0.0025)
 
 def _auto_select_env_coef() -> float:
     """Select national_env coefficient based on FINANCE_DATA_THROUGH date."""

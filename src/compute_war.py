@@ -65,10 +65,15 @@ OUTPUT = ROOT / "output"
 OUTPUT.mkdir(exist_ok=True)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from model_config import REGRESSION_COEFFICIENTS, IE_COEFFICIENT, IE_MIN_THRESHOLD
+from model_config import (REGRESSION_COEFFICIENTS, REGRESSION_COEFFICIENTS_NO_FINANCE,
+                          IE_COEFFICIENT, IE_MIN_THRESHOLD)
 
 COEFS = REGRESSION_COEFFICIENTS
 COEFS["ie_coefficient"] = IE_COEFFICIENT
+# The WAR baseline must not carry the full model's intercept (see
+# predict_dem_share). IE is exogenous targeting, so it stays in both.
+NO_FINANCE_COEFS = dict(REGRESSION_COEFFICIENTS_NO_FINANCE)
+NO_FINANCE_COEFS["ie_coefficient"] = IE_COEFFICIENT
 
 # Time-decay weights per cycle (geometric: 0.6 per cycle back from most recent)
 # 2024 = current (1.00), 2022 = 1 cycle back (0.60), 2020 = 2 back (0.36),
@@ -453,14 +458,24 @@ def predict_dem_share(df: pd.DataFrame) -> pd.Series:
     candidate fundraising capacity is partly a quality signal and would create double-counting.
     IEs are included as they represent exogenous targeting decisions by outside groups,
     not candidate-driven effects.
-    """
-    predicted = pd.Series(COEFS["intercept"], index=df.index, dtype=float)
 
-    predicted += COEFS["dem_pres_2p_baseline"] * df["dem_pres_2p_baseline"].fillna(df["dem_pres_2p_baseline"].mean())
-    predicted += COEFS["dem_incumbent"]         * df["dem_incumbent"].fillna(False).astype(float)
-    predicted += COEFS["rep_incumbent"]         * df["rep_incumbent"].fillna(False).astype(float)
-    predicted += COEFS["chamber_senate"]        * df["chamber_senate"].fillna(0)
-    predicted += COEFS["national_env"]          * df["national_env"]
+    Uses REGRESSION_COEFFICIENTS_NO_FINANCE, a genuine no-finance fit. This
+    function used to take the FULL model's coefficients and simply omit the two
+    finance terms while keeping its intercept. An intercept is not a constant of
+    nature -- it is whatever made the fitted line pass through the data given the
+    other regressors -- so dropping terms without refitting left the baseline
+    biased low, and the bias landed on candidates: mean residual +2.34pp instead
+    of 0. party_sign then flips WAR for Republicans, turning a uniform positive
+    residual into a pro-D adjustment on both sides of 110 of 166 districts.
+    """
+    NF = NO_FINANCE_COEFS
+    predicted = pd.Series(NF["intercept"], index=df.index, dtype=float)
+
+    predicted += NF["dem_pres_2p_baseline"] * df["dem_pres_2p_baseline"].fillna(df["dem_pres_2p_baseline"].mean())
+    predicted += NF["dem_incumbent"]         * df["dem_incumbent"].fillna(False).astype(float)
+    predicted += NF["rep_incumbent"]         * df["rep_incumbent"].fillna(False).astype(float)
+    predicted += NF["chamber_senate"]        * df["chamber_senate"].fillna(0)
+    predicted += NF["national_env"]          * df["national_env"]
 
     # IE adjustment — full-cycle weight (1.0) for historical data
     ie_total     = df["ie_total"].fillna(0)
@@ -475,7 +490,7 @@ def predict_dem_share(df: pd.DataFrame) -> pd.Series:
 # Compute per-race WAR
 # ---------------------------------------------------------------------------
 
-SIGMA_FULL_MODEL = COEFS["sigma"]   # full model residual SE = 0.0785
+SIGMA_FULL_MODEL = COEFS["sigma"]
 # Will be replaced with actual no-finance residual SE after computing WAR
 SIGMA_WAR_BASELINE = None
 
