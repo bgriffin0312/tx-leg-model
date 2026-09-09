@@ -585,7 +585,7 @@ function updateSummaryBar() {{
     document.getElementById("scen-house").innerHTML =
       'House: <b>' + s.expected_house_seats.toFixed(1) + 'D</b> expected &nbsp;(' + hCtrl + '% majority)';
     document.getElementById("scen-senate").innerHTML =
-      'Senate: <b>' + s.expected_senate_seats.toFixed(1) + 'D</b> on ballot &nbsp;(' + sCtrl + '% majority)';
+      'Senate: <b>' + s.expected_senate_seats.toFixed(1) + 'D</b> of 31 &nbsp;(' + sCtrl + '% majority)';
   }} else {{
     document.getElementById("scen-house").textContent = '';
     document.getElementById("scen-senate").textContent = '';

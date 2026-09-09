@@ -80,7 +80,11 @@ def build_figure(df: pd.DataFrame, current_env: float) -> go.Figure:
         subplot_titles=[
             "TX House — Expected D Seats won  (150 total; need 76 for majority)",
             "P(Democrats control TX House)",
-            "TX Senate seats on 2026 ballot — Expected D wins  (16 seats; need 16 total for D majority)",
+            # expected_senate_seats is a CHAMBER-WIDE total: simulated wins among
+            # the 16 seats on the ballot PLUS the 7 D holdovers not up in 2026
+            # (model.py:770-773). Labelling it "on 2026 ballot (16 seats)" read as
+            # 11.5 of 16 when the model means 11.5 of 31 — off by more than 2x.
+            "TX Senate — Expected D seats after 2026  (31 total, incl. 15 holdovers; need 16 for majority)",
             "P(Democrats control TX Senate)",
         ],
     )
@@ -202,7 +206,9 @@ def build_figure(df: pd.DataFrame, current_env: float) -> go.Figure:
 
         # Y-axis ranges
         y_lo = max(0, int(df[col_p10].min()) - 4)
-        y_hi = min(150 if chamber == "house" else 16,
+        # 31, not 16: the senate series is a chamber-wide total including
+        # holdovers, so capping the axis at the on-ballot count clipped it.
+        y_hi = min(150 if chamber == "house" else 31,
                    int(df[col_p90].max()) + 8)
         fig.update_yaxes(range=[y_lo, y_hi], title_text="D seats",
                          row=seat_row, col=1, gridcolor="#EBEBEB")

@@ -458,7 +458,8 @@ def _make_title(chamber: str, scen_label: str, env_dial: float, current_env: flo
         else:
             exp  = s["expected_senate_seats"]
             ctrl = s["senate_control_prob"] * 100
-            seat_note = f"  ·  Expected: {exp:.1f}D on ballot  ·  Majority: {ctrl:.0f}%"
+            # chamber-wide total (on-ballot wins + 7 D holdovers), not "on ballot"
+            seat_note = f"  ·  Expected: {exp:.1f}D of 31  ·  Majority: {ctrl:.0f}%"
 
     return (f"2026 {ch} — D Win Probability by District"
             f"<br><sup>{scen_label}{env_note}{seat_note}</sup>")

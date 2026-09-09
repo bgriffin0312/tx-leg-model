@@ -32,6 +32,7 @@ Usage:
 
 import argparse
 import io
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -149,7 +150,19 @@ def aggregate_presidential(df_elec: pd.DataFrame,
 
     pres["candidate_type"] = pres["Name"].apply(classify)
     pres["Votes"] = pd.to_numeric(pres["Votes"], errors="coerce").fillna(0)
-    pres["cntyvtd"] = pd.to_numeric(pres["cntyvtd"], errors="coerce")
+    # VTD keys are STRINGS, not numbers. Many counties letter-code them
+    # (Rockwall '397001A', Henderson '213001M', split precincts '11330T4'), and
+    # pd.to_numeric(errors="coerce") turned all of those into NaN, which the
+    # groupby below then dropped silently -- 494 keys / 406,076 votes / 3.56%
+    # of the statewide presidential total, gone before anything could notice.
+    # The diagnostic computed its own denominator AFTER the drop, so it printed
+    # "0.0% unassigned" the whole time. Keep the key as a string throughout.
+    pres["cntyvtd"] = pres["cntyvtd"].astype(str).str.strip().str.upper()
+
+    # Ground truth for the coverage line: the votes present in the FILE, taken
+    # before any join can discard them. Never re-derive this downstream.
+    votes_in_file = pres.loc[pres["candidate_type"].isin(["trump", "harris"]),
+                             "Votes"].sum()
 
     # Pivot to wide: one row per VTD with trump/harris/other votes
     vtd_pres = (pres.groupby(["cntyvtd", "candidate_type"])["Votes"]
@@ -160,21 +173,46 @@ def aggregate_presidential(df_elec: pd.DataFrame,
 
     # Join precinct mapping
     df_map = df_map.copy()
-    df_map["PCTKEY"] = pd.to_numeric(df_map["PCTKEY"], errors="coerce")
-    df_map = df_map.dropna(subset=["PCTKEY", "PlanH2316", "PlanS2168"])
+    df_map["PCTKEY"] = df_map["PCTKEY"].astype(str).str.strip().str.upper()
+    df_map = df_map.dropna(subset=["PlanH2316", "PlanS2168"])
+    df_map = df_map[df_map["PCTKEY"].ne("") & df_map["PCTKEY"].ne("NAN")]
     df_map["PlanH2316"] = df_map["PlanH2316"].astype(int)
     df_map["PlanS2168"] = df_map["PlanS2168"].astype(int)
 
+    # Two-pass match, same idiom as collect_historical_presidential.py:432-438:
+    # exact key first, then strip a trailing letter to fold split-precinct parts
+    # ('50010A' -> '50010') into the parent the map carries.
+    valid_pctkeys = set(df_map["PCTKEY"])
+
+    def resolve_pctkey(pk: str) -> str | None:
+        if pk in valid_pctkeys:
+            return pk
+        stripped = re.sub(r"[A-Z]+$", "", pk)
+        if stripped != pk and stripped in valid_pctkeys:
+            return stripped
+        return None
+
+    vtd_pres["matched_pctkey"] = vtd_pres["cntyvtd"].apply(resolve_pctkey)
+
     merged = vtd_pres.merge(
         df_map[["PCTKEY", "PlanH2316", "PlanS2168"]],
-        left_on="cntyvtd", right_on="PCTKEY", how="left"
+        left_on="matched_pctkey", right_on="PCTKEY", how="left"
     )
 
     unmatched = merged["PlanH2316"].isna().sum()
-    unmatched_votes = merged[merged["PlanH2316"].isna()][["trump", "harris"]].sum().sum()
-    total_votes = merged[["trump", "harris"]].sum().sum()
-    print(f"  Join: {unmatched} VTDs unmatched ({unmatched_votes:,.0f} / {total_votes:,.0f} "
-          f"presidential votes = {unmatched_votes/total_votes*100:.1f}% unassigned)")
+    unmatched_votes = merged.loc[merged["PlanH2316"].isna(), ["trump", "harris"]].sum().sum()
+    assigned_votes = votes_in_file - unmatched_votes
+    print(f"  Join: {unmatched} VTDs unmatched "
+          f"({unmatched_votes:,.0f} / {votes_in_file:,.0f} presidential votes = "
+          f"{unmatched_votes / votes_in_file * 100:.2f}% unassigned)")
+    # Hard stop rather than a quiet bias in the largest term in the model.
+    if unmatched_votes / votes_in_file > 0.01:
+        raise RuntimeError(
+            f"presidential join lost {unmatched_votes:,.0f} of {votes_in_file:,.0f} "
+            f"votes ({unmatched_votes / votes_in_file * 100:.2f}%) — refusing to "
+            f"write a biased dem_pres_2p_baseline. Inspect unmatched cntyvtd keys."
+        )
+    print(f"  Assigned to districts: {assigned_votes:,.0f} votes")
 
     def make_district_df(dist_col: str, chamber: str, n_max: int) -> pd.DataFrame:
         sub = merged.dropna(subset=[dist_col]).copy()
