@@ -74,12 +74,22 @@ samples 619–1,200. That is ~3/month. Historical monthly shape (2022 Gov, 2024
 Sen) shows October running 2–3× September and September ~2× August, projecting
 **5–7 Texas polls in September and 10–15 in October**.
 
-*The binding constraint is not volume — it is crosstabs.* Roughly 5–6 of the 9
-publish usable racial breakdowns (UT/Texas Politics Project, TSU/YouGov,
-Emerson, NYT/Siena, Fox). Realistic supply: **~2 Texas racial-crosstab polls per
-month now, 5–8 in October.** A prior session reached the same conclusion from
-the other direction: the NYT/Silver roster is topline-only, so it tells you who
-fielded, not what you can consume.
+*The binding constraint is not volume — it is crosstabs.* But **do not read that
+as a fixed roster of pollsters who "have crosstabs".** Whether a release breaks
+the generic ballot out by race is a property of **the release, not the
+pollster**: Emerson's July 2026 release had none (checked three ways) and its
+August release did, in a linked workbook tab. **Check every wave.**
+
+Rough expectation only: perhaps half of Texas releases carry a usable banner, so
+on the order of **2 Texas crosstab polls per month now, more in October.** A
+prior session reached the same conclusion from the other direction: the
+NYT/Silver roster lists toplines, so it tells you who fielded, not what you can
+consume.
+
+The maintained list is `config/pollster_registry.csv`, which records history —
+last release we actually pulled a banner from, and how many we have checked —
+rather than a verdict. `src/weekly_poll_check.py` prints it; scheduled task
+`poll-check-weekly` runs Thursdays 08:00.
 
 **Proposals, in order of value:**
 
@@ -108,12 +118,13 @@ it is not district polling.
 
 ## Small, self-contained, worth doing
 
-- **Fix the `update_polling.py` docstring** — it is actively misleading. Says
-  Quinnipiac is topline-only and lists four sources, but
-  `racial_crosstab_inputs.csv` now carries full W/B/H banners from Quantus, The
-  Argument/Verasight, Big Data Poll and Emerson. It also says "last 45 days"
-  while `WINDOW_DAYS = 30`. As written it sends a future session past sources
-  that work.
+- ~~Fix the `update_polling.py` docstring~~ — **done 2026-09-09.** It named four
+  sources and called Quinnipiac topline-only while the manual CSV already held
+  banners from Quantus, The Argument/Verasight, Big Data Poll and Emerson, and
+  it claimed a 45-day window the code never used. Rewritten to point at the
+  registry and state the per-release rule. **The general lesson stands: any
+  table in this repo asserting which pollsters "have crosstabs" is the wrong
+  shape and will rot — record per-release history instead.**
 - **Wire `data/raw/fox_texas_jul23-27_2026_crosstabs.pdf`** — a Texas crosstab
   PDF downloaded 8/15 and never used. `update_polling.py` contains no reference
   to Texas at all. First state-level source to test the channel against.

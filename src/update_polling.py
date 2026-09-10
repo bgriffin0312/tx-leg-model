@@ -4,20 +4,38 @@ update_polling.py
 Update RACE_GENERIC_BALLOT_D_SHARE in model_config.py from multiple free public
 polling sources, replacing the old single-poll DDHQ snapshot approach.
 
-SOURCES:
-  1. Economist/YouGov weekly crosstab PDFs (free, ~1,600 RV/week, weekly cadence).
-     Provides full racial crosstabs (White/Black/Hispanic).
-  2. Marist/NPR monthly crosstab PDFs (free, ~1,400 adults, monthly cadence).
-     Provides full racial crosstabs (White/Black/Latino).
-  3. Quinnipiac monthly PDFs — topline only (no racial crosstabs in 2025-2026
-     format). Used for topline cross-check, not racial aggregation.
-  4. Manual CSV (data/raw/racial_crosstab_inputs.csv) — any poll you want to add
-     by hand (e.g., from Pew, ANES, or paywalled aggregators).
+WHICH POLLS HAVE RACIAL CROSSTABS — read this before trusting any list
+  Whether a release breaks the generic ballot out by race is a property of THAT
+  RELEASE, not of the pollster. Emerson's July 2026 release had no ballot-by-race
+  (checked three ways: page links, sheet export, hidden tabs); its August 2026
+  release did, in a linked workbook tab.
+
+  This docstring used to assert otherwise. It named four sources, said YouGov and
+  Marist "provide full racial crosstabs", and wrote Quinnipiac off as "topline
+  only (no racial crosstabs in 2025-2026 format)" on the strength of one December
+  2025 PDF. It was also simply out of date: racial_crosstab_inputs.csv now holds
+  W/B/H banners from four pollsters it never mentioned — Quantus Insights, The
+  Argument/Verasight, Big Data Poll and Emerson — so a reader trusting it walked
+  straight past working sources. Do not recreate a list of that shape here.
+
+  The maintained list is config/pollster_registry.csv, which records HISTORY
+  (the last release we actually pulled a banner from, and how many we have
+  checked) rather than a verdict. See it with src/weekly_poll_check.py.
+
+HARD-WIRED EXTRACTORS IN THIS FILE (a different thing from "has crosstabs"):
+  1. Economist/YouGov weekly PDFs. Detection keys on the 'genericcongressional
+     vote' table label — a YouGov-specific string, not a general detector.
+     Latest wired: 2026-08-28_to_31.
+  2. Marist/NPR PDFs. Latest wired: 2026-03-02 — STALE, verify before relying.
+  3. Quinnipiac PDFs. Latest wired: 2025-12-17 — STALE.
+  4. Manual CSV (data/raw/racial_crosstab_inputs.csv), which is where every
+     recent row has actually come from.
 
 AGGREGATION:
-  - Filter to last 45 days (configurable)
+  - Filter to the last WINDOW_DAYS days. That is 30; this line said 45, which
+    the code has never done.
   - Exclude Rasmussen racial subgroups (known R-lean outlier; topline kept)
-  - Recency weighting: last 14 days = 2x, 15-45 days = 1x
+  - Recency weighting: last 14 days = 2x, older within the window = 1x
   - Weighted average across all sources with racial crosstabs
   - Other/Asian solved from topline constraint
 
@@ -458,7 +476,10 @@ def _parse_marist_pdf(pdf_bytes: bytes, verbose: bool = False) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Source 3: Quinnipiac (topline only — no racial crosstabs in 2025-2026 format)
+# Source 3: Quinnipiac. The one release ever checked (2025-12-17) carried no
+# racial banner, so this extractor pulls topline only. That is a fact about THAT
+# PDF, not a permanent property of Quinnipiac — formats change and a newer
+# release may well carry one. Check the release rather than trusting this note.
 # ---------------------------------------------------------------------------
 
 # Known recent Quinnipiac PDFs with generic ballot question (most recent first).
@@ -868,7 +889,8 @@ def main():
         print(f"  → {len(mr)} polls with racial crosstabs")
 
     if "quinnipiac" in sources:
-        print(f"\n[Quinnipiac] Fetching monthly polls (topline only — no racial crosstabs)...")
+        print(f"\n[Quinnipiac] Fetching monthly polls (extractor pulls topline; "
+              f"check the release itself for a racial banner)...")
         qu = fetch_quinnipiac(force=args.force_download, verbose=args.verbose)
         all_polls.extend(qu)
         print(f"  → {len(qu)} polls (topline only)")
