@@ -108,6 +108,21 @@ generic read the 2022 Texas swing in the wrong direction. Texas banners
 2016–2026 captured in `data/raw/texas_crosstab_inputs.csv` (gitignored;
 mirrored).
 
+**Which statewide race is the right instrument — measured 2026-09-10, see
+`docs/statewide-proxy-findings.md`.** Same-year, five cycles: the low-salience
+races (Supreme Court, CCA, Railroad Commissioner, Comptroller) track the House
+best and the top of the ticket worst; the 2024 presidential vote is the worst
+of the nine 2024 statewide contests as a House proxy (resid sd 2.4pp vs 1.6 for
+RRC) and misses 70%+ Hispanic seats by +3.9pp vs +1–2 for judicial races.
+Cross-cycle is split: 2016→2018 favoured President, 2020→2022 (the only
+post-straight-ticket pair) favoured RRC, where President missed South Texas
+by +5.7pp and RRC by +0.7pp. Empirical district-level pass-through is 1.0–1.1
+in both pairs. **Open item, ahead of the refit decision:** build a 2024
+RRC/judicial-mean baseline on PlanH2316 and run it through the 2022 backtest
+against the presidential baseline. For the Texas banners: use the mean of the
+TX-legislature generic, AG and Comptroller; exclude Senate (Talarico runs 3–5pp
+ahead among white voters in every UT wave).
+
 **Caveat to keep stating:** these are *statewide* polls. They give the Texas
 Hispanic vote share, not HD 74's. Better than borrowing the national number, but
 it is not district polling.
