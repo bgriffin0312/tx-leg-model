@@ -256,6 +256,55 @@ def load_districts() -> pd.DataFrame:
           f"{n_senate} Senate)")
     print(f"  Senate: {_SENATE_D_HOLDOVER} holdover D seats + {n_senate} on ballot "
           f"-> D needs {senate_need} wins for majority")
+    df = _attach_unopposed(df)
+    return df
+
+
+def _attach_unopposed(df: pd.DataFrame) -> pd.DataFrame:
+    """Mark districts where one major party has no general-election candidate.
+
+    candidates_2026.csv records r_status / d_status = "none_filed" with a blank
+    name for those seats. They are decided, not contested; simulating them from
+    the linear prediction leaks probability to a candidate who does not exist.
+    Before this fix (2026-09-10) the 19 D-held seats with no Republican filed
+    summed to ~0.36 phantom R seats at D+9.1 and ~1.2 at R+3, most of it HD 36.
+
+    Adds column forced_d_win: 1.0 = D unopposed, 0.0 = R unopposed, NaN = contested.
+    run_monte_carlo() uses it to fix the outcome before seats are summed. This is
+    the single place the rule lives; the output builders must not re-apply it.
+    """
+    df["forced_d_win"] = np.nan
+    path = DATA_PROC / "candidates_2026.csv"
+    if not path.exists():
+        print("  WARNING: candidates_2026.csv missing; unopposed seats will be "
+              "simulated as if contested")
+        return df
+
+    cand = pd.read_csv(path)
+    cand["chamber_lower"] = cand["chamber"].str.lower()
+    cand["district"] = cand["district"].astype(int)
+
+    def _blank(val) -> bool:
+        return pd.isna(val) or not str(val).strip()
+
+    forced: dict[tuple[str, int], float] = {}
+    for _, row in cand.iterrows():
+        key = (row["chamber_lower"], int(row["district"]))
+        r_none = str(row.get("r_status", "")).strip() == "none_filed" and _blank(row.get("r_candidate"))
+        d_none = str(row.get("d_status", "")).strip() == "none_filed" and _blank(row.get("d_candidate"))
+        if r_none and d_none:
+            continue  # data error; leave contested rather than guess
+        if r_none:
+            forced[key] = 1.0
+        elif d_none:
+            forced[key] = 0.0
+
+    keys = list(zip(df["chamber_lower"], df["district"].astype(int)))
+    df["forced_d_win"] = [forced.get(k, np.nan) for k in keys]
+    n_d = int((df["forced_d_win"] == 1.0).sum())
+    n_r = int((df["forced_d_win"] == 0.0).sum())
+    print(f"  Unopposed: {n_d} D seats with no R filed, {n_r} R seats with no D filed "
+          f"(held fixed, not simulated)")
     return df
 
 
@@ -563,6 +612,13 @@ def run_monte_carlo(df: pd.DataFrame,
 
     # Win if predicted > 0.5
     wins = (predicted_matrix > 0.5)  # (n_districts, n_sims) boolean
+
+    # Unopposed seats are decided, not simulated (see _attach_unopposed).
+    # NaN compares False on both tests, so contested rows are untouched.
+    if "forced_d_win" in df.columns:
+        forced = df["forced_d_win"].values
+        wins[forced == 1.0, :] = True
+        wins[forced == 0.0, :] = False
 
     house_wins = wins[is_house, :]   # (n_house_districts, n_sims)
     senate_wins = wins[~is_house, :] # (n_senate_districts, n_sims)

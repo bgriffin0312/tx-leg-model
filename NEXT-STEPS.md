@@ -135,9 +135,13 @@ it is not district polling.
   rows), `notes_2026` (30) and the whole finance/IE block; nothing repopulates
   the first two. Blast radius is the six R-held seats atop the competitive list,
   which would each silently gain an 8pp incumbency term.
-- **Phantom R seats.** 19 D-held districts with `r_status=none_filed` still get
-  a summed 0.33 R seats; `model.py` never consults `candidates_2026.csv`.
-  Surfaces as HD 36 showing a flip probability with `nan` as the R candidate.
+- ~~Phantom R seats~~ — **fixed 2026-09-10.** `model.py` now reads
+  `candidates_2026.csv` (`_attach_unopposed`) and holds any seat with one side
+  `none_filed` at 1.0/0.0 inside `run_monte_carlo` before seats are summed;
+  the display-only override in `build_maps.py` is gone. Effect on master at
+  D+9.1: +0.3 expected House seats (66.2 → 66.5), +0.6 at R+3; P(majority)
+  unchanged to four decimals because the leak was idiosyncratic noise on HD
+  36/39/75/78/105, not national swing. Only the 19 flagged districts moved.
 - **Fix the validation harness** (`~/.claude/skills/election-model-validation/`).
   It reported 4 blocking FAILs, **all four wrong**, and missed the one real
   name-match failure (HD 22 Hayes/Manuel). Row count compared to 166 without

@@ -190,28 +190,9 @@ def load_scenarios(chamber: str) -> pd.DataFrame:
     # Keep scenario columns in sorted order
     scenario_cols = [s for _, s in scenario_list if s in wide.columns]
 
-    # Override win_prob_d for uncontested races (no opponent filed)
-    cand_path = ROOT / "data" / "processed" / "candidates_2026.csv"
-    if cand_path.exists():
-        cand_df = pd.read_csv(cand_path)
-        ch_label = "House" if chamber == "house" else "Senate"
-        cand_ch = cand_df[cand_df["chamber"] == ch_label]
-        for _, cr in cand_ch.iterrows():
-            dist = int(cr["district"])
-            r_status = str(cr.get("r_status") or "").strip()
-            d_status = str(cr.get("d_status") or "").strip()
-            r_cand = str(cr.get("r_candidate") or "").strip() if pd.notna(cr.get("r_candidate")) else ""
-            d_cand = str(cr.get("d_candidate") or "").strip() if pd.notna(cr.get("d_candidate")) else ""
-            if r_status == "none_filed" and not r_cand:
-                # D runs unopposed → win_prob_d = 1.0
-                mask = wide["district"] == dist
-                for sc in scenario_cols:
-                    wide.loc[mask, sc] = 1.0
-            elif d_status == "none_filed" and not d_cand:
-                # R runs unopposed → win_prob_d = 0.0
-                mask = wide["district"] == dist
-                for sc in scenario_cols:
-                    wide.loc[mask, sc] = 0.0
+    # Unopposed races arrive from model.py already fixed at 1.0 / 0.0
+    # (_attach_unopposed + run_monte_carlo, 2026-09-10). The override that used
+    # to live here masked the bug in the seat totals; do not reintroduce it.
 
     return wide, scenario_list, scenario_cols
 
