@@ -61,3 +61,4 @@ logs/
 *.mhtml
 data/*.pdf
 
+_poll_discovery_state.json
