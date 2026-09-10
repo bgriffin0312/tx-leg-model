@@ -93,6 +93,11 @@ NATIONAL_DEMO_WEIGHTS: dict[str, float] = {
 #   "rrc"   — 2024 Railroad Commissioner (Craddick v. Warford), from
 #             data/raw/historical/tx_downballot_{chamber}_2024_plan*.csv.
 #   "blend" — half presidential, half Railroad Commissioner.
+#   "open"  — mean of the 2024 statewide downballot races with NO incumbent
+#             on either side (Brennan's rule, 2026-09-10): CCA Presiding
+#             Judge, CCA 7, CCA 8. The 2024 RRC race had an incumbent
+#             (Craddick), so it is excluded here.
+#   "blend_open" — half presidential, half open-race mean.
 # Evidence: docs/statewide-proxy-findings.md and scripts/baseline_backtest.py
 # (2026-09-10). Same-year the presidential vote is the worst of the nine 2024
 # statewide races as a House proxy; leave-one-cycle-out on 2014/2018/2022 the

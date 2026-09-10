@@ -143,15 +143,79 @@ Reading:
   master is the mismatched-geography artefact the refit branch already
   identified.
 
+## Test 3b — open races only (Brennan's rule, same day)
+
+"Statewide races only make sense as baselines if they have no incumbents."
+The Capitol Data returns flag incumbents per candidate, so the collector now
+tags every race and writes `open_mean_d2p`: the mean of the RRC / Supreme
+Court / CCA contests with no incumbent on either side.
+
+| year | open downballot races | note |
+|---|---|---|
+| 2012 | RRC 1 (Craddick v Henry) | |
+| 2016 | RRC 1 (Christian v Yarbrough), CCA 5 (Walker v Johnson) | |
+| 2020 | RRC 1 (Wright v Castañeda) | the race that won the 2022 backtest |
+| 2024 | CCA Presiding Judge, CCA 7, CCA 8 | all three incumbents lost their primaries; **RRC 2024 had Craddick, so it is out** |
+
+TLC flags appointees inconsistently (Blacklock 2018 no, Bland 2020 yes); the
+flag is used as given.
+
+Backtest with the open composite added (same harness, same rows):
+
+| held-out | metric | presidential | RRC | open | ½ pres + ½ open |
+|---|---|---|---|---|---|
+| 2018 | MAE (pp) / seat err | 5.42 / −6.2 | 3.62 / −4.1 | **3.43 / −3.8** | 4.30 / −5.3 |
+| 2022 | resid sd / seat err | 3.08 / +2.2 | 2.60 / +1.0 | 2.59 / **+0.9** | **2.56** / +1.6 |
+| 2022 | resid ~ Hispanic slope | −0.085 | −0.002 | −0.002 | −0.046 |
+| avg | resid sd / Brier | 2.83 / .0375 | 3.00 / .0355 | 2.95 / .0351 | **2.66 / .0352** |
+| avg | abs seat err / MAE | 3.3 / 3.36 | 2.3 / 2.66 | **2.2 / 2.59** | 2.9 / 2.83 |
+
+The open composite is at least as good as RRC in every cycle and slightly
+better on average, and the pres+open blend has the best average residual sd
+and Brier of everything tried. The rule costs nothing in the backtest and
+removes an incumbent (Craddick) from the 2026 instrument, so it is adopted:
+**the 2024 baseline candidates are `open` (three CCA races) and `blend_open`.**
+
 ## What it does to 2026
 
 `scripts/baseline_project_2026.py` (structural model, each baseline with its
 own pooled coefficients, D+9.1, no WAR/finance/IE, no Monte Carlo): 59 House
-seats predicted D on the presidential baseline, 65 on RRC, 62 on the blend.
-Six seats cross 50% between presidential and RRC: HD 34, 35, 37, 41 and 118
-move to D, HD 112 moves to R. The RGV seats move +5 to +7pp; the Anglo
-suburban seats (HD 70, 108, 133) move −1 to −2pp. Part of that spread is the
-RRC fit's larger environment coefficient at D+9.1, not only the baseline.
+seats predicted D on the presidential baseline, 65 on RRC or open, 62 on
+either blend. Six seats cross 50% between presidential and open: HD 34, 35,
+37, 41 and 118 move to D, HD 112 moves to R; the pres+open blend moves only
+HD 34, 35 and 41. The RGV seats move +5 to +6pp; the Anglo suburban seats
+(HD 70, 108, 138) move −0.7 to −1.7pp. Part of that spread is the open fit's
+larger environment coefficient at D+9.1, not only the baseline.
+
+## The AG race as the Texas generic ballot by race (Brennan's original question)
+
+`scripts/ag_anchor_2026.py`. The national generic ballot by race, mean of
+the five 2026 polls with a banner, is white 46.8 / Black 85.5 / Hispanic
+62.5. The UT August AG banner (Middleton v Johnson, RV) is 37.7 / 81.7 /
+51.3. Texas offset, Texas minus national: white −9.1, Black −3.8, Hispanic
+−11.2. **Relative to white voters the Hispanic offset is only −2.1pp**, and
++1.9 on the Jun+Aug mean of AG, Comptroller and legislative generic. So the
+national-to-Texas gap is mostly uniform (Texas is redder), which belongs in
+the environment dial and intercept, not in a race term. The −0.05 Hispanic
+constant assumed a Hispanic-specific gap; the 2026 banners do not show one.
+
+Where the AG anchor bites is the *trend*. National banners imply Hispanic
+voters have moved +8.5pp toward Democrats since 2024 (Catalist 54 → 62.5);
+the Texas AG banner puts Texas Hispanics at 51.3 against a 2024 Texas
+benchmark of 50.6, a move of +0.7. Texas whites moved +6.3 (31.4 → 37.7).
+Centered on the validated 2024 Texas electorate, the shift term is white
++2.3 / Black −7.3 / Hispanic −3.2, which gives a 90% Hispanic district
+−2.6pp relative to uniform swing and a 15% Hispanic district +1.5pp. On the
+smoothed Jun+Aug downballot mean the same term is −0.4 / +0.8: close to
+nothing. Either way the answer to "correct the national Hispanic lean with
+the AG race" is: do not apply the national Hispanic rebound to Texas. The
+Texas banners say Texas Hispanics are where they were in 2024.
+
+Caveats: RV banners with ~24% of Hispanics undecided; Hispanic cell n≈350;
+June and August AG Hispanic readings differ by 5pp, which is the noise band;
+the 2024 Black benchmark is a national assumption. Use the mean of AG,
+Comptroller and legislative generic across the last two releases, not one
+race from one wave, and shrink toward zero.
 
 Running the *full* model with `TXLEG_BASELINE=rrc` under master's current
 coefficients goes the other way (D+9.1: 66.5 → 65.1 expected House seats,

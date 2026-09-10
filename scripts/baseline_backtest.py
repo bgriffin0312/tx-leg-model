@@ -56,6 +56,8 @@ BASELINES = {
     "judicial": "judicial_mean_d2p",
     "downballot": "downballot_mean_d2p",
     "blend": "blend_pres_rrc",
+    "open": "open_mean_d2p",
+    "blend_open": "blend_pres_open",
 }
 COVARS = ["dem_incumbent", "rep_incumbent", "chamber_senate", "national_env"]
 
@@ -71,7 +73,8 @@ def load():
             print(f"  WARN missing {fname}; {year} {chamber} rows will lack downballot baselines")
             continue
         d = pd.read_csv(p)[["district", "rrc_d2p", "judicial_mean_d2p",
-                            "downballot_mean_d2p", "pres_d2p", "n_judicial"]]
+                            "downballot_mean_d2p", "open_mean_d2p", "pres_d2p",
+                            "n_judicial", "n_open"]]
         d["year"] = year
         d["chamber_lower"] = chamber
         parts.append(d)
@@ -91,6 +94,8 @@ def load():
         df[c] = pd.to_numeric(df[c], errors="coerce")
     # Cautious middle: half presidential, half Railroad Commissioner.
     df["blend_pres_rrc"] = 0.5 * (df["pres_d2p"] + df["rrc_d2p"])
+    # Brennan's rule: only statewide races with no incumbent on either side.
+    df["blend_pres_open"] = 0.5 * (df["pres_d2p"] + df["open_mean_d2p"])
     return df
 
 

@@ -36,13 +36,26 @@ Commissioner and judicial-mean shares by district exist for both chambers
 the plans the backtests use), and `model_config.BASELINE_SOURCE` /
 `TXLEG_BASELINE=rrc|blend` swaps them in. Leave-one-cycle-out on 2014/2018/2022
 (`scripts/baseline_backtest.py`, `docs/statewide-proxy-findings.md` test 3):
-the ½-presidential ½-RRC blend has the best residual sd and Brier, RRC the
-best seat error and an outright win in 2022 (Hispanic residual slope −0.085 →
-−0.002), judicial mean is out. Pass-through is ~1.0 for every baseline on
-clean cycles. Under master's 0.596 the RRC baseline *lowers* D seats
-(66.5 → 65.1 at D+9.1) because the damped pass-through mutes the South Texas
-gain; under refit coefficients the structural model gains six seats. Decide
-baseline and pass-through together, on the refit branch.
+the ½-presidential ½-open blend has the best residual sd and Brier, the
+open-race composite (statewide downballot races with no incumbent on either
+side — Brennan's rule; for 2024 that is the three CCA seats, not RRC, because
+Craddick was an incumbent) the best seat error and an outright win in 2022
+(Hispanic residual slope −0.085 → −0.002); judicial mean is out. Candidates
+are `open` and `blend_open`. Pass-through is ~1.0 for every baseline on
+clean cycles. Under master's 0.596 a downballot baseline *lowers* D seats
+(66.5 → 65.1 at D+9.1 for RRC) because the damped pass-through mutes the
+South Texas gain; under refit coefficients the structural model gains six
+seats. Decide baseline and pass-through together, on the refit branch.
+
+**AG race as the Texas generic ballot by race (2026-09-10,
+`scripts/ag_anchor_2026.py`):** the Texas-minus-national offset is −9 white,
+−4 Black, −11 Hispanic, i.e. mostly uniform; relative to white voters the
+Hispanic offset is −2 to +2pp, so there is no Hispanic-specific correction
+to make and the −0.05 constant has no 2026 support. The national Hispanic
+rebound since 2024 (+8.5pp) does not appear in Texas (+0.7 on the AG banner);
+the Texas-anchored centered shift is white +2.3 / Hispanic −3.2 on the
+August AG banner and ≈0 on the smoothed downballot mean. AG and Comptroller
+banners for Jun+Aug 2026 are now in `texas_crosstab_inputs.csv`.
 
 Two parts of the branch are *not* contested and can be adopted independently:
 - **WAR re-centering.** Mean baseline residual +2.464 → +0.279pp. Straightforwardly correct.

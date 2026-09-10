@@ -42,13 +42,15 @@ def main():
     parts = []
     for chamber, fname in (("house", "tx_downballot_house_2024_planh2316.csv"),
                            ("senate", "tx_downballot_senate_2024_plans2168.csv")):
-        x = pd.read_csv(HIST / fname)[["district", "pres_d2p", "rrc_d2p", "judicial_mean_d2p"]]
+        x = pd.read_csv(HIST / fname)[["district", "pres_d2p", "rrc_d2p", "judicial_mean_d2p", "open_mean_d2p"]]
         x["chamber_lower"] = chamber
         parts.append(x)
     d = d.merge(pd.concat(parts), on=["chamber_lower", "district"], how="left")
     d["blend_pres_rrc"] = 0.5 * (d["pres_d2p"] + d["rrc_d2p"])
+    d["blend_pres_open"] = 0.5 * (d["pres_d2p"] + d["open_mean_d2p"])
 
-    cols = {"pres": "pres_d2p", "rrc": "rrc_d2p", "blend": "blend_pres_rrc"}
+    cols = {"pres": "pres_d2p", "rrc": "rrc_d2p", "blend": "blend_pres_rrc",
+            "open": "open_mean_d2p", "blend_open": "blend_pres_open"}
     for label, xcol in cols.items():
         beta, sig = bb.fit(sample[sample[xcol].notna()], xcol)
         d[f"pred_{label}"] = bb.predict(d, xcol, beta)
@@ -60,19 +62,19 @@ def main():
     for label in cols:
         print(f"  {label:6s} {int((house[f'pred_{label}'] > 0.5).sum())} / 150")
 
-    d["shift_rrc_pp"] = (d["pred_rrc"] - d["pred_pres"]) * 100
-    d["shift_blend_pp"] = (d["pred_blend"] - d["pred_pres"]) * 100
-    mv = d[(d[["pred_pres", "pred_rrc", "pred_blend"]].max(axis=1) > 0.42)
-           & (d[["pred_pres", "pred_rrc", "pred_blend"]].min(axis=1) < 0.58)].copy()
-    mv = mv.sort_values("shift_rrc_pp")
-    pd.set_option("display.width", 200)
+    preds = [f"pred_{k}" for k in cols]
+    d["shift_open_pp"] = (d["pred_open"] - d["pred_pres"]) * 100
+    mv = d[(d[preds].max(axis=1) > 0.42) & (d[preds].min(axis=1) < 0.58)].copy()
+    mv = mv.sort_values("shift_open_pp")
+    pd.set_option("display.width", 220)
     show = ["chamber", "district", "incumbent", "incumbent_party", "pct_hispanic",
-            "pres_d2p", "rrc_d2p", "pred_pres", "pred_rrc", "pred_blend", "shift_rrc_pp"]
-    print("\nSeats within 42-58% under any baseline, sorted by how far RRC moves them (pp):")
+            "pres_d2p", "rrc_d2p", "open_mean_d2p"] + preds + ["shift_open_pp"]
+    print("\nSeats within 42-58% under any baseline, sorted by how far the open-race baseline moves them (pp):")
     print(mv[show].round(3).to_string(index=False))
-    crossers = mv[((mv["pred_pres"] > 0.5) != (mv["pred_rrc"] > 0.5))]
-    print(f"\nSeats that cross 50% between presidential and RRC baselines: "
-          f"{[(r.chamber[0] + str(r.district)) for r in crossers.itertuples()]}")
+    for k in ("rrc", "open", "blend_open"):
+        crossers = mv[((mv["pred_pres"] > 0.5) != (mv[f"pred_{k}"] > 0.5))]
+        print(f"Seats that cross 50% between presidential and {k}: "
+              f"{[(r.chamber[0] + str(r.district)) for r in crossers.itertuples()]}")
 
 
 if __name__ == "__main__":

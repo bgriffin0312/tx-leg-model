@@ -278,8 +278,8 @@ def _apply_baseline_source(df: pd.DataFrame) -> pd.DataFrame:
     source = os.environ.get("TXLEG_BASELINE", str(BASELINE_SOURCE)).lower()
     if source == "pres":
         return df
-    if source not in ("rrc", "blend"):
-        raise ValueError(f"BASELINE_SOURCE must be pres, rrc or blend; got {BASELINE_SOURCE!r}")
+    if source not in ("rrc", "blend", "open", "blend_open"):
+        raise ValueError(f"BASELINE_SOURCE must be pres, rrc, blend, open or blend_open; got {source!r}")
     files = {"house": "tx_downballot_house_2024_planh2316.csv",
              "senate": "tx_downballot_senate_2024_plans2168.csv"}
     parts = []
@@ -289,11 +289,16 @@ def _apply_baseline_source(df: pd.DataFrame) -> pd.DataFrame:
             raise FileNotFoundError(
                 f"{path} missing. Run: python src/collect_downballot_spatial.py "
                 f"--year 2024 --plan {'H2316' if chamber == 'house' else 'S2168'}")
-        x = pd.read_csv(path)[["district", "pres_d2p", "rrc_d2p"]]
+        x = pd.read_csv(path)[["district", "pres_d2p", "rrc_d2p", "open_mean_d2p"]]
         x["chamber_lower"] = chamber
         parts.append(x)
     alt = pd.concat(parts, ignore_index=True)
-    alt["alt_baseline"] = alt["rrc_d2p"] if source == "rrc" else 0.5 * (alt["pres_d2p"] + alt["rrc_d2p"])
+    alt["alt_baseline"] = {
+        "rrc": alt["rrc_d2p"],
+        "blend": 0.5 * (alt["pres_d2p"] + alt["rrc_d2p"]),
+        "open": alt["open_mean_d2p"],
+        "blend_open": 0.5 * (alt["pres_d2p"] + alt["open_mean_d2p"]),
+    }[source]
     merged = df.merge(alt[["chamber_lower", "district", "alt_baseline"]],
                       on=["chamber_lower", "district"], how="left")
     missing = merged["alt_baseline"].isna().sum()

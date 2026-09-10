@@ -73,6 +73,12 @@ def load_returns(year: int) -> pd.DataFrame:
     df["Votes"] = pd.to_numeric(df["Votes"], errors="coerce").fillna(0)
     # Keys are strings; see collect_presidential_spatial.load_returns.
     df["PCTKEY"] = df["cntyvtd"].astype(str).str.strip().str.upper()
+    # Incumbency per race, from the file's own flag (Brennan, 2026-09-10: a
+    # statewide race is only a clean partisan baseline when nobody in it is an
+    # incumbent). TLC flags appointees inconsistently (Blacklock 2018 N,
+    # Bland 2020 Y); the flag is used as given.
+    inc = (df.assign(_inc=df["Incumbent"].astype(str).str.upper().str.startswith("Y"))
+             .groupby("Office")["_inc"].any())
     wide = (df.groupby(["PCTKEY", "Office", "Party"])["Votes"].sum()
               .unstack("Party", fill_value=0).reset_index())
     for c in ("D", "R"):
@@ -83,7 +89,9 @@ def load_returns(year: int) -> pd.DataFrame:
     dropped = sorted(set(totals.index) - set(contested))
     if dropped:
         print(f"  skipped (no D-v-R contest): {dropped}")
-    return wide[wide["Office"].isin(contested)]
+    wide = wide[wide["Office"].isin(contested)]
+    wide.attrs["has_incumbent"] = {o: bool(inc.get(o, False)) for o in contested}
+    return wide
 
 
 def build_overlay(year: int, plan: str) -> tuple[pd.DataFrame, str, str, int, set[str]]:
@@ -152,12 +160,20 @@ def main():
 
     jud = [c for c in out.columns if re.match(r"d2p__(sup_ct|cca)", c)]
     rrc = [c for c in out.columns if c.startswith("d2p__rr_comm")]
+    has_inc = votes.attrs["has_incumbent"]
+    open_offices = [o for o in offices if re.match(r"^(RR Comm|Sup Ct|CCA)", o) and not has_inc[o]]
+    opn = [f"d2p__{slug(o)}" for o in open_offices]
+    print(f"  incumbents: {[o for o in offices if has_inc[o]]}")
+    print(f"  open downballot races: {open_offices}")
     out["rrc_d2p"] = out[rrc].mean(axis=1).round(4) if rrc else float("nan")
     out["judicial_mean_d2p"] = out[jud].mean(axis=1).round(4) if jud else float("nan")
     out["downballot_mean_d2p"] = out[jud + rrc].mean(axis=1).round(4) if (jud or rrc) else float("nan")
+    out["open_mean_d2p"] = out[opn].mean(axis=1).round(4) if opn else float("nan")
     out["pres_d2p"] = out["d2p__president"] if "d2p__president" in out else float("nan")
     out["sen_d2p"] = out["d2p__u_s_sen"] if "d2p__u_s_sen" in out else float("nan")
     out["n_judicial"] = len(jud)
+    out["n_open"] = len(opn)
+    out["open_offices"] = "; ".join(open_offices)
     out["chamber"] = chamber
     out["year"] = args.year
     out["plan"] = args.plan
@@ -169,7 +185,8 @@ def main():
           f"judicial {out['judicial_mean_d2p'].mean():.4f}  (n_judicial={len(jud)})")
     path = HIST / f"tx_downballot_{chamber}_{args.year}_plan{args.plan.lower()}.csv"
     lead = ["chamber", "district", "year", "plan", "rrc_d2p", "judicial_mean_d2p",
-            "downballot_mean_d2p", "pres_d2p", "sen_d2p", "n_judicial"]
+            "downballot_mean_d2p", "open_mean_d2p", "pres_d2p", "sen_d2p",
+            "n_judicial", "n_open", "open_offices"]
     rest = [c for c in out.columns if c not in lead and c != "data_source"]
     out[lead + rest + ["data_source"]].to_csv(path, index=False)
     print(f"  wrote {path.name}")
