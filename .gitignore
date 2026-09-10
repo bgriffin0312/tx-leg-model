@@ -62,3 +62,5 @@ logs/
 data/*.pdf
 
 _poll_discovery_state.json
+logs/
+_weekly_poll_check_state.json
