@@ -272,20 +272,90 @@ against Catalist — .591 vs .54 — so its raw Texas Hispanic .513 is probably
 ~.46 after bias correction, which is where the exit poll and Catalist's
 "below 50%" also sit.)
 
-### Revised recommendation
+### Revised recommendation (superseded by §6 — kept for the reasoning)
 
-- **Now:** remove the level term and the constant (§3a) and ship the null
-  plus the correlated group-error layer (§3e), with σ_hispanic set so that
-  the benchmark spread above (roughly ±3pp on a South Texas seat) is inside
-  one sigma. This is strictly better-calibrated than today on both backtests
-  and asserts nothing the data cannot support.
-- **Then:** add the shift term only from **same-pollster, same-ballot Texas
-  differences** (§3b, with UT Oct 2024 LV as the benchmark), shrunk with the
-  400 pseudo-count. Its current point estimate is +3.4pp in South Texas; it
-  should enter at roughly a third of that weight until a second Texas
-  legislative banner agrees.
-- **Never:** Δ that subtracts a presidential benchmark from a generic-ballot
-  poll. The 2018 run is the proof.
+- Remove the level term and the constant (§3a); ship the null plus the
+  correlated group-error layer (§3e).
+- The same-pollster shift term was the candidate second step. §6 tests it
+  with as-of-September-1 inputs and it does not earn its place either.
+- Never subtract a presidential benchmark from a generic-ballot poll.
+
+## 6. As-of-September-1 rebuild (2026-09-09) — the comparison Brennan asked for
+
+The shipped backtests are "as of April". The model we run today is a
+September model, so the fair test uses what was in hand on ~Sept 1 of 2018
+and 2022. `scripts/shift_term_backtest_sept1.py` rebuilds both cycles that
+way and swaps only the demographic term. Inputs, all now on disk:
+
+| | 2018 | 2022 |
+|---|---|---|
+| Env dial (RCP-style, Sept 1) | D+7.5 (RCP ran ~D+7 through Sept; ±0.5) | D+0.5 (RCP: Democrats retook the lead Sept 1) |
+| National by race | Pew Sep 18–24 (W .484 / B .828 / H .685); Mar–Jun 4-poll avg | HH Jul 27–28; Pew Aug 1–14; YouGov Aug 28–30; HH Sep 7–8 → avg W .445 / B .822 / H .632 |
+| Texas by race, in hand Sept 1 | UT **Jun 2018** RV legislative generic (UT had no Aug wave) | UT **Aug 2022** RV legislative generic |
+| Same-pollster benchmark | UT Oct 2016 LV generic | UT Oct 2020 RV legislative generic |
+| UT Δ (pp) | W +6.6, B +2.6, **H −6.3** | W +0.1, B +2.9, H +0.2 |
+
+Harvard-Harris's 2018 August/September books carry no generic-ballot table
+(checked both), so 2018's national side is Pew plus the spring average — thin,
+and stated as such. The 2022 national side is four polls in the window.
+
+Results, refit structural coefficients (config-coefficient rows are in the
+script output and tell the same story):
+
+| cycle | variant | house err | Brier | mean resid | resid ~ Hispanic slope |
+|---|---|---|---|---|---|
+| 2018 | level + constant (shipped) | +2.9 | .0616 | −0.1pp | **+0.154** |
+| 2018 | level, no constant | +4.9 | .0646 | +1.1 | **+0.204** |
+| 2018 | **no demo term** | **−0.4** | .0618 | −1.4 | **+0.039** |
+| 2018 | shift, national-only Δ | −2.9 | .0668 | −2.1 | −0.042 |
+| 2018 | shift, same-pollster UT Δ | −2.6 | .0684 | −1.9 | −0.062 |
+| 2022 | level + constant (shipped) | +9.0 | .0354 | +4.4 | +0.045 |
+| 2022 | level, no constant | +11.3 | .0462 | +6.1 | **+0.095** |
+| 2022 | **no demo term** | +6.5 | .0319 | +2.3 | **−0.027** |
+| 2022 | shift, national-only Δ | +5.7 | .0337 | +1.9 | −0.028 |
+| 2022 | shift, same-pollster UT Δ | +6.5 | .0315 | +2.3 | −0.028 |
+
+What changed, and what did not, with September inputs:
+
+1. **Unchanged: the null has no Hispanic-correlated error** (+0.04 / −0.03)
+   and the level term manufactures one (+0.10 to +0.20). This is now shown
+   with April inputs, September inputs, honest polls (2018) and perfect
+   hindsight (2022 April run). It is not an artifact of any input choice.
+2. **The same-pollster shift term fails too.** In 2018 it cost 2.2 seats and
+   0.007 Brier against the null, because UT's June 2018 registered-voter
+   banner had 28% of Hispanics undecided and the Oct 2016 benchmark was a
+   likely-voter banner — same pollster, not same population, and the
+   Hispanic "−6.3 shift" is that mismatch, not movement. In 2022 UT's series
+   read ~zero shift and the term was a no-op. Two cycles, zero wins.
+3. **The level term's apparent 2018 help is coefficient compensation.** Under
+   the config's attenuated pass-through (0.596) the model under-predicts
+   Democrats in a wave year and the level term's +4.5pp bias happens to fill
+   the hole; under the refit pass-through it is just bias again.
+4. **A Texas topline problem is visible and separate.** In 2022 the null is
+   still +2.3pp too Democratic across the board with the right national
+   environment. That is Texas swinging further right than the nation in 2022
+   (Abbott +11), and UT's Aug 2022 generic read Texas as +2.6 *more*
+   Democratic than Oct 2020 — the wrong direction. Whether any Texas poll
+   series can supply a Texas-specific environment offset is an open question
+   with its own test to write; the race crosstabs are not where that signal
+   lives.
+
+### Final recommendation
+
+- **Ship:** no demographic term; correlated group-error layer (§3e) with
+  σ_hispanic large enough to cover the benchmark spread in §5 (≈4.5pp);
+  `TX_HISPANIC_ADJUSTMENT` deleted. Refit the σ split with the layer in.
+- **Shelve the shift term.** It has no backtest support in either form. Keep
+  `data/raw/texas_crosstab_inputs.csv` growing and re-run
+  `scripts/shift_term_backtest_sept1.py` when a new Texas banner lands; the
+  bar for entry is beating the null on both cycles, which nothing has.
+- **New open item:** a Texas-specific environment offset from Texas generic
+  *toplines* (not crosstabs), tested the same way. 2022 says the model needs
+  one; 2022 also says UT's RV generic did not provide it.
+- The Texas race banners are still worth collecting — for σ calibration, for
+  the environment-offset test, and because a same-population, same-month
+  pair (UT Oct 2024 LV → UT Oct 2026 LV) has not been tested yet and is the
+  one remaining version of the idea with a fair chance.
 
 ## 4. Caveats to keep stating
 

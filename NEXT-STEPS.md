@@ -91,20 +91,22 @@ last release we actually pulled a banner from, and how many we have checked —
 rather than a verdict. `src/weekly_poll_check.py` prints it; scheduled task
 `poll-check-weekly` runs Thursdays 08:00.
 
-**The proposal is written: `docs/poll-integration-proposal.md` (2026-09-09).**
-Short form: the demo term is a *level* double-counting the presidential
-baseline (+3.69pp mean, r = +0.70) and the Hispanic constant is a patch on
-that, calibrated against national polls. Replace it with a centered
-shift-since-2024 term, Texas-anchored — the 2024 benchmark from CES validated
-voters (white .314 / Black .85 / Hispanic .506 / other .60, reconciled to the
-actual .431), the current value from a Texas *generic-legislative* banner
-(UT/TPP Aug 2026 has one) used as a per-group offset on the frequent national
-crosstabs, with subgroup shrinkage, LV/recency weighting, and a correlated
-group-error layer in the Monte Carlo (required — a Hispanic miss must move
-all of South Texas in the same simulation). Sequencing in §3f: on
-`refit-clean-cycles`, backtest the shift term on 2018/2022 first, and stop if
-`house_err` does not fall without the constant. Texas banners captured in
-`data/raw/texas_crosstab_inputs.csv` (gitignored; mirrored).
+**The proposal and its two rounds of backtests are in
+`docs/poll-integration-proposal.md` (2026-09-09; §5 April inputs, §6
+as-of-September-1 inputs).** Verdict: the demo term is a *level* that
+double-counts the presidential baseline (+3.7pp mean, r = +0.70) and
+manufactures the Hispanic-correlated residual the −0.05 constant was fit to
+cancel; with no demographic term that residual is zero in both cycles under
+both input sets. No shift-form replacement — national-only or same-pollster
+Texas (UT) — beat the null in either cycle. **Ship: no demographic term,
+delete the constant, add the correlated group-error layer, refit the σ
+split.** Shelved: the shift term (re-test each new Texas banner with
+`scripts/shift_term_backtest_sept1.py`). New open item: a Texas-specific
+environment offset from Texas generic *toplines* — 2022's null run is +2.3pp
+too Democratic across the board with the right national dial, and UT's RV
+generic read the 2022 Texas swing in the wrong direction. Texas banners
+2016–2026 captured in `data/raw/texas_crosstab_inputs.csv` (gitignored;
+mirrored).
 
 **Caveat to keep stating:** these are *statewide* polls. They give the Texas
 Hispanic vote share, not HD 74's. Better than borrowing the national number, but
