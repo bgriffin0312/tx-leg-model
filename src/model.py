@@ -37,6 +37,7 @@ Usage:
 """
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -49,6 +50,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).parent.parent
 DATA_PROC = ROOT / "data" / "processed"
+DATA_HIST = ROOT / "data" / "raw" / "historical"
 OUTPUT = ROOT / "output"
 OUTPUT.mkdir(exist_ok=True)
 
@@ -72,6 +74,7 @@ from model_config import (
     IE_DATA_THROUGH,
     WAR_PERSISTENCE_COEF,
     TX_HISPANIC_ADJUSTMENT,
+    BASELINE_SOURCE,
 )
 
 _HAS_FUNDRAISING_SHARE = "dem_fundraising_share" in COEFS
@@ -257,6 +260,52 @@ def load_districts() -> pd.DataFrame:
     print(f"  Senate: {_SENATE_D_HOLDOVER} holdover D seats + {n_senate} on ballot "
           f"-> D needs {senate_need} wins for majority")
     df = _attach_unopposed(df)
+    df = _apply_baseline_source(df)
+    return df
+
+
+def _apply_baseline_source(df: pd.DataFrame) -> pd.DataFrame:
+    """Swap dem_pres_2p_baseline for a downballot 2024 baseline when configured.
+
+    BASELINE_SOURCE in model_config: "pres" (default, no change), "rrc", or
+    "blend". The replacement keeps the column name so every downstream term
+    (pass-through, WAR, finance) is untouched; only the district's partisan
+    anchor changes. See model_config.BASELINE_SOURCE for the evidence and the
+    coefficient caveat.
+    """
+    # TXLEG_BASELINE in the environment overrides the config for one run, so
+    # the baselines can be compared without editing model_config.py.
+    source = os.environ.get("TXLEG_BASELINE", str(BASELINE_SOURCE)).lower()
+    if source == "pres":
+        return df
+    if source not in ("rrc", "blend"):
+        raise ValueError(f"BASELINE_SOURCE must be pres, rrc or blend; got {BASELINE_SOURCE!r}")
+    files = {"house": "tx_downballot_house_2024_planh2316.csv",
+             "senate": "tx_downballot_senate_2024_plans2168.csv"}
+    parts = []
+    for chamber, fname in files.items():
+        path = DATA_HIST / fname
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} missing. Run: python src/collect_downballot_spatial.py "
+                f"--year 2024 --plan {'H2316' if chamber == 'house' else 'S2168'}")
+        x = pd.read_csv(path)[["district", "pres_d2p", "rrc_d2p"]]
+        x["chamber_lower"] = chamber
+        parts.append(x)
+    alt = pd.concat(parts, ignore_index=True)
+    alt["alt_baseline"] = alt["rrc_d2p"] if source == "rrc" else 0.5 * (alt["pres_d2p"] + alt["rrc_d2p"])
+    merged = df.merge(alt[["chamber_lower", "district", "alt_baseline"]],
+                      on=["chamber_lower", "district"], how="left")
+    missing = merged["alt_baseline"].isna().sum()
+    if missing:
+        raise ValueError(f"{missing} on-ballot districts have no {source} baseline")
+    old = pd.to_numeric(df["dem_pres_2p_baseline"], errors="coerce")
+    df["dem_pres_2p_baseline"] = merged["alt_baseline"].values
+    delta = (df["dem_pres_2p_baseline"] - old) * 100
+    print(f"  Baseline source: {source} (2024 downballot replaces presidential; "
+          f"mean shift {delta.mean():+.2f}pp, range {delta.min():+.1f} to {delta.max():+.1f})")
+    print("  WARNING: REGRESSION_COEFFICIENTS were fit on the presidential baseline; "
+          "see model_config.BASELINE_SOURCE")
     return df
 
 

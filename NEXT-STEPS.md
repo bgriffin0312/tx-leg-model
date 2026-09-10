@@ -30,6 +30,20 @@ results show Democratic incumbents there still running well ahead of the top of
 the ticket (HD 74 Morales +9.1pp, HD 41 Guerra +4.3pp). **The refit bets that gap
 closes by 2026.** That is a claim about Texas politics, not statistics.
 
+**The baseline is now part of this decision (2026-09-10).** 2024 Railroad
+Commissioner and judicial-mean shares by district exist for both chambers
+(`data/raw/historical/tx_downballot_*_2024_*.csv`, plus 2012/2016/2020 on
+the plans the backtests use), and `model_config.BASELINE_SOURCE` /
+`TXLEG_BASELINE=rrc|blend` swaps them in. Leave-one-cycle-out on 2014/2018/2022
+(`scripts/baseline_backtest.py`, `docs/statewide-proxy-findings.md` test 3):
+the ½-presidential ½-RRC blend has the best residual sd and Brier, RRC the
+best seat error and an outright win in 2022 (Hispanic residual slope −0.085 →
+−0.002), judicial mean is out. Pass-through is ~1.0 for every baseline on
+clean cycles. Under master's 0.596 the RRC baseline *lowers* D seats
+(66.5 → 65.1 at D+9.1) because the damped pass-through mutes the South Texas
+gain; under refit coefficients the structural model gains six seats. Decide
+baseline and pass-through together, on the refit branch.
+
 Two parts of the branch are *not* contested and can be adopted independently:
 - **WAR re-centering.** Mean baseline residual +2.464 → +0.279pp. Straightforwardly correct.
 - **The σ decomposition** (national 0.0339 / idio 0.0280, total 0.0440), which

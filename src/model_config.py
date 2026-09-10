@@ -86,6 +86,27 @@ NATIONAL_DEMO_WEIGHTS: dict[str, float] = {
 }
 
 # ---------------------------------------------------------------------------
+# Partisan baseline source
+# ---------------------------------------------------------------------------
+# Which 2024 statewide race supplies each district's partisan baseline.
+#   "pres"  — 2024 presidential two-party share (districts_2026.csv column).
+#   "rrc"   — 2024 Railroad Commissioner (Craddick v. Warford), from
+#             data/raw/historical/tx_downballot_{chamber}_2024_plan*.csv.
+#   "blend" — half presidential, half Railroad Commissioner.
+# Evidence: docs/statewide-proxy-findings.md and scripts/baseline_backtest.py
+# (2026-09-10). Same-year the presidential vote is the worst of the nine 2024
+# statewide races as a House proxy; leave-one-cycle-out on 2014/2018/2022 the
+# blend has the lowest residual sd and RRC the lowest seat error and Brier,
+# with RRC winning outright in 2022, the only post-straight-ticket cycle.
+# The judicial mean was worse than both in every cycle and is not offered.
+#
+# Switching this does NOT refit REGRESSION_COEFFICIENTS below, which were fit
+# on the presidential baseline (pass-through 0.596 on mismatched geography;
+# ~0.99 on clean cycles). Pooled clean-cycle pass-through is 1.07 for RRC and
+# 1.04 for the blend. Decide the baseline together with the refit.
+BASELINE_SOURCE: str = "pres"
+
+# ---------------------------------------------------------------------------
 # Phase 1 Regression Coefficients (from run_phase1_regression.py)
 # ---------------------------------------------------------------------------
 # These come from the FULL model (with finance) in output/phase1_regression_summary.txt.

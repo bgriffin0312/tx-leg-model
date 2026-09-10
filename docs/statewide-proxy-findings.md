@@ -91,12 +91,83 @@ the Talarico effect. AG, Comptroller, Governor and the legislative generic
 cluster within about 2pp of each other. 23–25% of Hispanic respondents are
 undecided on AG and Comptroller, so those cells are noisy.
 
+## Test 3 — the baseline backtest (2026-09-10, later the same day)
+
+`src/collect_downballot_spatial.py` built RRC, judicial-mean and presidential
+D shares by district for 2012→H358/S172, 2016→H2100/S172, 2020→H2316/S2168
+and 2024→H2316/S2168 (99.9% of vote attached; the spatial presidential column
+matches the repo's key-join file to 0.03pp). `scripts/baseline_backtest.py`
+then fits the structural regression (baseline + incumbency + chamber + env)
+on the contested races of two midterms and scores the third, for each
+baseline on identical rows, σ = 0.0742 throughout.
+
+Pooled fit, 259 contested races 2014+2018+2022:
+
+| baseline | pass-through | sigma |
+|---|---|---|
+| presidential | 0.986 | 2.57pp |
+| RRC | 1.067 | 2.95pp |
+| judicial mean | 1.076 | 2.89pp |
+| blend (½ pres + ½ RRC) | 1.036 | 2.52pp |
+
+Held out, one cycle at a time:
+
+| held-out | metric | presidential | RRC | judicial | blend |
+|---|---|---|---|---|---|
+| 2014 | resid sd / MAE (pp) | **2.71** / 2.29 | 2.98 / 2.39 | 2.78 / 2.65 | 2.74 / **2.26** |
+| 2014 | House seat error | **+1.5** | +1.8 | +3.4 | +1.6 |
+| 2018 | resid sd / MAE (pp) | **2.70** / 5.42 | 3.43 / 3.62 | 3.28 / 5.60 | 2.75 / 4.38 |
+| 2018 | House seat error | −6.2 | **−4.1** | +11.4 | −5.4 |
+| 2018 | resid, 70%+ Hispanic | **+0.0** | +4.1 | +11.7 | +2.0 |
+| 2022 | resid sd / MAE (pp) | 3.08 / 2.39 | 2.60 / 1.96 | 2.69 / 2.42 | **2.56** / **1.95** |
+| 2022 | House seat error | +2.2 | **+1.0** | −1.5 | +1.6 |
+| 2022 | resid ~ Hispanic slope | −0.085 | **−0.002** | −0.012 | −0.046 |
+| 2022 | resid, 70%+ Hispanic (n=10) | −3.8 | **−0.6** | −2.5 | −2.3 |
+| avg | resid sd / Brier | 2.83 / .0375 | 3.00 / **.0355** | 2.92 / .0462 | **2.69** / .0354 |
+| avg | abs House seat error | 3.3 | **2.3** | 5.5 | 2.9 |
+
+Reading:
+
+- **Judicial mean is out.** Worst or near-worst in every cycle. Two causes:
+  Democrats fielded candidates in only two 2012 judicial races, and in the
+  straight-ticket era the judicial D share in South Texas was inflated
+  (2018 residual +11.7pp in 70%+ Hispanic seats).
+- **RRC wins the only post-straight-ticket cycle outright** — 2022 residual
+  sd 2.60 vs 3.08, seat error 1.0 vs 2.2, and the Hispanic-correlated
+  residual that the −0.05 constant was invented to cancel goes from −0.085 to
+  −0.002. It loses on dispersion in 2014 and 2018 (straight-ticket era) while
+  still beating the presidential baseline on seat error in 2018.
+- **The blend is the best average** on residual sd and Brier and is never
+  worse than second. It halves the 2022 Hispanic slope rather than removing it.
+- Pass-through is ~1.0 for every baseline on clean cycles. The 0.596 in
+  master is the mismatched-geography artefact the refit branch already
+  identified.
+
+## What it does to 2026
+
+`scripts/baseline_project_2026.py` (structural model, each baseline with its
+own pooled coefficients, D+9.1, no WAR/finance/IE, no Monte Carlo): 59 House
+seats predicted D on the presidential baseline, 65 on RRC, 62 on the blend.
+Six seats cross 50% between presidential and RRC: HD 34, 35, 37, 41 and 118
+move to D, HD 112 moves to R. The RGV seats move +5 to +7pp; the Anglo
+suburban seats (HD 70, 108, 133) move −1 to −2pp. Part of that spread is the
+RRC fit's larger environment coefficient at D+9.1, not only the baseline.
+
+Running the *full* model with `TXLEG_BASELINE=rrc` under master's current
+coefficients goes the other way (D+9.1: 66.5 → 65.1 expected House seats,
+P(majority) 11.9% → 7.8%), because a 0.596 pass-through damps the South
+Texas gain while the statewide −1.3pp shift of the downballot vote hits every
+seat. **The baseline switch and the coefficient refit are one decision.**
+`model_config.BASELINE_SOURCE` (pres | rrc | blend; env override
+`TXLEG_BASELINE`) is wired and defaults to pres.
+
 ## Recommendations
 
-1. **Baseline:** build 2024 RRC (Craddick v. Warford) and a 2024 judicial-mean
-   D share by district on PlanH2316 from the cached 2024 VTD file, and test it
-   against the presidential baseline in the 2022 backtest harness before the
-   refit decision. Data is cached; this is one script.
+1. **Baseline:** take the decision with the refit. On the refit branch, run
+   `TXLEG_BASELINE=rrc` and `=blend` and compare the competitive list to
+   the presidential run. Preference from the evidence: blend if you weight
+   all three cycles, RRC if you weight the post-straight-ticket regime, which
+   is the one 2026 will be run under. Judicial mean is not a candidate.
 2. **Texas crosstab instrument:** read the group shift from the mean of the
    TX-legislature generic, AG and Comptroller banners in the same release.
    Exclude Senate. Governor at most half weight.
