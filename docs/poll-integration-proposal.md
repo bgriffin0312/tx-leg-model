@@ -77,24 +77,20 @@ Texas measurements. Say so in the methodology doc.
 
 ### 2c. What the shift form produces
 
-Texas shifts since 2024 from UT's legislative generic minus the benchmark:
+Texas shifts since 2024 from UT's legislative generic minus the CES benchmark:
 **white +4.1, Hispanic +2.7, Black −2.4** (other −10.0, from UT's tiny Asian
 cell — noise; see shrinkage). The national crosstabs alone imply Hispanic
-**+7.8**, white +1.5.
+**+7.8**, white +5.5 (Catalist 2024 white is .42; an earlier draft of this
+section used .46, which was wrong).
 
-Centered shift term across the 166 districts:
-
-| Source of Δ | mean | sd | min | max | r with pres baseline |
-|---|---|---|---|---|---|
-| Texas (UT lege-generic − benchmark) | −0.16pp | 1.08 | −4.35 | +1.47 | −0.66 |
-| National only (4-poll − Catalist 2024) | +0.87pp | 1.51 | −0.92 | **+5.06** | +0.18 |
-| *Current level form, for comparison* | *+3.69pp* | — | — | — | *+0.70* |
-
-The +5pp South Texas bump under national-only Δ is exactly the thing the
-Hispanic constant was invented to suppress. Texas data removes it directly: the
-2026 movement is among Anglo Texans, not a Hispanic swing-back. The −0.66
-correlation on the Texas row is driven by the Black −2.4 and other −10 cells,
-both small-n — hence §3c.
+**The shift depends on which 2024 benchmark you subtract** — see §5 for the
+full comparison after the backtest. Under the CES-reconciled benchmark the
+2026 movement looks Anglo-driven; under UT's own October 2024 likely-voter
+banner (same pollster, same ballot) it is Hispanic-driven (+4.5) with whites
+slightly *less* Democratic (−1.9). The Hispanic-minus-white relative shift,
+which is what the district term actually carries, ranges from **−1.4 to
++6.4pp** across defensible benchmarks. That range is the correlated
+group-error layer's job (§3e), not a point estimate's.
 
 ## 3. The proposal
 
@@ -196,10 +192,9 @@ moved by roughly the bias this removes; merging one without the other will look
 wrong in both directions. Order:
 
 1. `data/raw/texas_crosstab_inputs.csv` schema + loader (done alongside this doc).
-2. §3a shift term with `Δ` from national-only inputs; backtest 2018/2022 (no
-   Texas banners exist for those years) and confirm `house_err` falls without
-   the constant. If it does not, stop and report — the double-count theory is
-   wrong and the constant stays.
+2. ~~§3a shift term with national-only Δ; backtest 2018/2022~~ **Done — see
+   §5.** Double-count confirmed; national-only Δ rejected; null + group-error
+   layer is the ship target, same-pollster shift term second.
 3. §3b/§3c Texas offset + shrinkage; re-run 2026.
 4. §3e group-error layer; refit σ split; validation harness check.
 5. §3d source weighting last — it changes nothing until October. Re-run the
@@ -207,6 +202,90 @@ wrong in both directions. Order:
    change to fundamentals.
 6. Methodology doc rewrite (it is gitignored under `output/`; move the
    methodology to `docs/` so it is versioned).
+
+## 5. Step-2 backtest results (2026-09-09) — what survived
+
+`scripts/shift_term_backtest.py` swaps only the demographic term on the
+existing 2018 and 2022 backtests: V0 level + constant (shipped), V1 level
+alone, V2/V3 centered shift with national-only Δ (Catalist prior-presidential
+benchmark), V4 no demographic term. Run under the config's coefficients and
+under the `refit-clean-cycles` structural coefficients. 2018 is shown with
+`env_dial = +8.6` (the config ships 0 against an April-2018 generic ballot of
+~D+8 — a separate config bug, logged in NEXT-STEPS). Metric that matters:
+the slope of contested-race residuals on Hispanic CVAP share, which is the
+statistic `TX_HISPANIC_ADJUSTMENT` was fit to.
+
+| cycle / coefs | variant | house err | Brier | mean resid | resid ~ Hispanic slope |
+|---|---|---|---|---|---|
+| 2018 refit | level + constant | +3.8 | .0636 | +0.4pp | **+0.161** |
+| 2018 refit | level, no constant | +5.9 | .0677 | +1.6 | **+0.211** |
+| 2018 refit | shift (national Δ) | −1.7 | .0647 | −1.6 | −0.035 |
+| 2018 refit | **no demo term** | **+0.4** | **.0615** | −1.0 | **+0.039** |
+| 2022 refit | level + constant | +7.1 | .0278 | +3.6 | +0.051 |
+| 2022 refit | level, no constant | +9.4 | .0369 | +5.2 | **+0.101** |
+| 2022 refit | shift (national Δ) | +3.9–4.7 | .0256–.0271 | +1.0–1.4 | −0.021 |
+| 2022 refit | **no demo term** | **+4.0** | **.0255** | +1.0 | **−0.026** |
+| 2022 config | level + constant | +4.7 | .0199 | +1.9 | **+0.067** |
+| 2022 config | no demo term | +2.0 | .0213 | −0.6 | −0.010 |
+
+Three findings.
+
+1. **The Hispanic-correlated residual is manufactured by the level term.**
+   With no demographic term at all the slope is +0.04 (2018) and −0.03 (2022)
+   — zero within noise — in both cycles and under both coefficient sets. The
+   level term puts a +0.10 to +0.21 slope there; the constant was fit to
+   cancel it (the 2022-config row reproduces the +0.067 the constant's
+   provenance block cites). **`TX_HISPANIC_ADJUSTMENT` and the level term go,
+   together, regardless of what replaces them.** Confirmed.
+2. **The shift term with national-only Δ does not earn its place.** In 2022
+   it is indistinguishable from no term (Δ is small and same-ballot). In 2018
+   it is *worse* than no term by 0.6–2.7pp of mean residual, because Δ mixed
+   generic-ballot polls (Mar–Jun 2018) against a presidential benchmark:
+   Black −4.6 and other −10.6 are ballot artifacts, and the centered term
+   then penalizes high-Black and high-Asian districts. **Δ must be same-ballot,
+   and ideally same-pollster.** For 2026 that means UT's own October 2024
+   likely-voter Texas Legislature banner, not CES presidential.
+3. **The null is the safe default.** Under refit coefficients with the right
+   environment dial, "no demographic term" is best or within noise of best on
+   every metric in both cycles.
+
+Same-pollster series now on file (UT/TPP Texas Legislature generic, 2-party
+D): Jun 2024 RV .470 (W .379 / B .810 / H .564); **Oct 2024 LV .467 (W .374 /
+B .830 / H .488)**; Jun 2026 RV .468 (W .354 / B .866 / H .556); Aug 2026 RV
+.467 (W .355 / B .826 / H .533). UT's statewide generic has not moved since
+October 2024 while the national generic moved ~R+1 → D+9; whether that is a
+Texas fact or a UT-format fact is the next thing to learn from a second
+Texas legislative banner.
+
+District term under four defensible Δ choices (other cell shrunk to 0):
+
+| Δ source | white | Hispanic | H−W | term mean | sd | max | mean in 29 seats >60% Hispanic |
+|---|---|---|---|---|---|---|---|
+| CES-reconciled benchmark | +4.1 | +2.7 | −1.4 | −0.30 | 0.82 | +0.96 | −0.15pp |
+| UT same-pollster (Oct 24 LV) | −1.9 | +4.5 | +6.4 | +0.90 | 1.34 | +4.47 | **+3.35pp** |
+| National-only (Catalist 24) | +5.5 | +7.8 | +2.3 | +0.25 | 1.11 | +2.72 | +1.92pp |
+| CES bias-corrected (nat CES−Catalist) | +2.8 | +7.3 | +4.5 | +0.54 | 1.37 | +4.11 | +2.96pp |
+
+The South Texas effect ranges from −0.2 to +3.4pp depending on which 2024
+benchmark is believed. (CES overstates Hispanic D support nationally by 5pp
+against Catalist — .591 vs .54 — so its raw Texas Hispanic .513 is probably
+~.46 after bias correction, which is where the exit poll and Catalist's
+"below 50%" also sit.)
+
+### Revised recommendation
+
+- **Now:** remove the level term and the constant (§3a) and ship the null
+  plus the correlated group-error layer (§3e), with σ_hispanic set so that
+  the benchmark spread above (roughly ±3pp on a South Texas seat) is inside
+  one sigma. This is strictly better-calibrated than today on both backtests
+  and asserts nothing the data cannot support.
+- **Then:** add the shift term only from **same-pollster, same-ballot Texas
+  differences** (§3b, with UT Oct 2024 LV as the benchmark), shrunk with the
+  400 pseudo-count. Its current point estimate is +3.4pp in South Texas; it
+  should enter at roughly a third of that weight until a second Texas
+  legislative banner agrees.
+- **Never:** Δ that subtracts a presidential benchmark from a generic-ballot
+  poll. The 2018 run is the proof.
 
 ## 4. Caveats to keep stating
 

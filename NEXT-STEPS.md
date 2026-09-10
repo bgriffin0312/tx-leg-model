@@ -121,9 +121,14 @@ it is not district polling.
   registry and state the per-release rule. **The general lesson stands: any
   table in this repo asserting which pollsters "have crosstabs" is the wrong
   shape and will rot — record per-release history instead.**
-- **Wire `data/raw/fox_texas_jul23-27_2026_crosstabs.pdf`** — a Texas crosstab
-  PDF downloaded 8/15 and never used. `update_polling.py` contains no reference
-  to Texas at all. First state-level source to test the channel against.
+- ~~Wire the Fox Texas crosstab PDF~~ — **parsed 2026-09-09** into
+  `data/raw/texas_crosstab_inputs.csv` along with UT/TPP (Jun/Oct 2024, Jun/Aug
+  2026) and Emerson Texas. `update_polling.py` still has no Texas loader; that
+  is step 1 of `docs/poll-integration-proposal.md` §3f.
+- **`backtest_config.py` 2018 `env_dial` is 0.** Its own comment says the
+  April-2018 generic ballot was ~D+8; 2022 uses the actual −2.8. Setting +8.6
+  moves the 2018 house error by ~3 seats and mean residual by ~2pp. Fix when
+  the backtests are next touched.
 - **`build_district_table.py` guard.** It silently destroys `open_seat` (28
   rows), `notes_2026` (30) and the whole finance/IE block; nothing repopulates
   the first two. Blast radius is the six R-held seats atop the competitive list,
