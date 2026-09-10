@@ -91,24 +91,20 @@ last release we actually pulled a banner from, and how many we have checked —
 rather than a verdict. `src/weekly_poll_check.py` prints it; scheduled task
 `poll-check-weekly` runs Thursdays 08:00.
 
-**Proposals, in order of value:**
-
-1. **Time-varying fundamentals weight.** λ(t) decaying from ~1 to ~0, blending
-   the presidential-baseline prediction against a poll-implied one. This is what
-   resolves the pass-through impasse — it stops being a permanent parameter
-   choice and becomes a question the next eight weeks of polling answers.
-   **Tie the schedule to observed crosstab volume, not the calendar**, or you
-   replace a stale prior with two noisy crosstabs.
-2. **Weight polls properly and prefer LV.** `aggregate_polls` currently uses a
-   flat 30-day window and a count threshold of 2. Wants exponential recency
-   decay with a shortening half-life, √(sample size), pollster quality, and the
-   LV version where a pollster publishes both.
-3. **Retire `TX_HISPANIC_ADJUSTMENT = −0.05`.** Fit on 2022 residuals and then
-   scored on 2022 — circular. If Texas LV crosstabs are good enough to be
-   definitive they should replace it, not sit beside it.
-4. **Correlated subgroup error** in the Monte Carlo. A 5-point Hispanic miss
-   across all of South Texas simultaneously is realistic and currently
-   unrepresentable — those districts are drawn independently.
+**The proposal is written: `docs/poll-integration-proposal.md` (2026-09-09).**
+Short form: the demo term is a *level* double-counting the presidential
+baseline (+3.69pp mean, r = +0.70) and the Hispanic constant is a patch on
+that, calibrated against national polls. Replace it with a centered
+shift-since-2024 term, Texas-anchored — the 2024 benchmark from CES validated
+voters (white .314 / Black .85 / Hispanic .506 / other .60, reconciled to the
+actual .431), the current value from a Texas *generic-legislative* banner
+(UT/TPP Aug 2026 has one) used as a per-group offset on the frequent national
+crosstabs, with subgroup shrinkage, LV/recency weighting, and a correlated
+group-error layer in the Monte Carlo (required — a Hispanic miss must move
+all of South Texas in the same simulation). Sequencing in §3f: on
+`refit-clean-cycles`, backtest the shift term on 2018/2022 first, and stop if
+`house_err` does not fall without the constant. Texas banners captured in
+`data/raw/texas_crosstab_inputs.csv` (gitignored; mirrored).
 
 **Caveat to keep stating:** these are *statewide* polls. They give the Texas
 Hispanic vote share, not HD 74's. Better than borrowing the national number, but
