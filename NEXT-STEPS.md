@@ -9,6 +9,9 @@ been republished.*
 
 ## The one decision blocking everything else
 
+**→ Step-by-step review with worked districts: `docs/baseline-refit-decision.md`
+(2026-09-10). Brennan plans to decide over the weekend of 2026-09-12/13.**
+
 **Adopt, damp, or reject the clean-cycle coefficient refit** (branch
 `refit-clean-cycles`, commit message has the full reasoning).
 
