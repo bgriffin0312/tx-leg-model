@@ -66,6 +66,30 @@ Still open from the September recommendation:
 
 ---
 
+## Firebrand / rabble-rouser penalty (2026-10-07)
+
+Brennan asked whether visibly extra-partisan members pay a general-election
+penalty, measured by high-profile signals rather than votes.
+`scripts/firebrand_penalty_test.py`; tags in `data/raw/historical/
+tx_texas_monthly_lists.csv` (Texas Monthly Best/Worst 2013–2025, 203 rows) and
+`tx_firebrand_markers.csv` (Freedom Caucus by session, insurgent PAC backing,
+speaker revolts, viral confrontations, quorum-break leaders; 295 rows, every row
+sourced; establishment-target censures and other wrong-way rows recoded out).
+Outcome: race WAR, contested incumbent races 2018–2024; a tag counts for the two
+elections after it.
+
+- **Raw: yes.** Republican firebrands run −0.9pp (t −2.8, person-clustered;
+  60 races / 39 people); Texas Monthly Worst Rs −1.1; Freedom Caucus −0.8;
+  speaker-revolt Rs −2.1 (14 races). Texas Monthly Best Rs +1.5. Democratic
+  rabble-rousers +1.0 (13 races) — no penalty, if anything a bonus.
+- **Beyond the member's own track record: no.** Controlling for prior WAR the
+  R tag is −0.2 (t −0.5); adding a penalty on top of the model's WAR term makes
+  out-of-sample prediction worse. The penalty is real but already carried by
+  WAR persistence. No model change.
+- **New open item:** in these regressions prior WAR predicts the next race at
+  ~0.25 (se 0.15), vs `WAR_PERSISTENCE_COEF` 0.46 — estimated on the pre-refit
+  WAR definition. Re-estimate persistence on the rebuilt WAR.
+
 ## Texas-poll calibration — historical piece (2026-10-07)
 
 Brennan asked how to use Texas polls against the generic-ballot dial. Built
