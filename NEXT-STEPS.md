@@ -3,10 +3,10 @@
 *Written 2026-09-09 at the end of a full bug-and-code audit. Everything below is
 either measured or explicitly flagged as unverified.*
 
-*Published: GitHub Pages republished 2026-10-07 (`19a0073`, the D+9.2 run below).
-The Substack's Datawrapper embeds (l53Um / oz3IU / L6hhb) have the new data
-uploaded but NOT published — `sync_datawrapper.py` still gets 403 "Insufficient
-scope" on publish; the token needs the publish scope, or click Publish by hand.*
+*Published 2026-10-07: GitHub Pages (`19a0073`) and the Substack's Datawrapper
+embeds (House v5, Senate v4, WAR v4, verified with `scripts/check_live_embeds.py`).
+Publishing needed token scopes chart:read/write + theme:read + visualization:read.
+Routine: `publish_charts.ps1` → `sync_datawrapper.py` → `check_live_embeds.py`.*
 
 *2026-10-07: polls (11-pollster national race aggregate, D+9.2), October 30-day
 TEC reports and IEs are in, and the September refit decision was taken (open-race
