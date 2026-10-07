@@ -31,6 +31,12 @@ TX_HISPANIC_ADJUSTMENT global per run and passes crosstabs/env explicitly.
 import sys
 from pathlib import Path
 
+# RETIRED 2026-10-07: this what-if varies the demographic level term and the
+# TX Hispanic constant, both deleted from model.py. Kept for the record of the
+# May 2026 result (memory: project_tx_only_whatif_may19); it no longer runs.
+raise SystemExit("scenario_ut_tt.py is retired: the demographic term it varies "
+                 "was removed from model.py on 2026-10-07.")
+
 import pandas as pd
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")

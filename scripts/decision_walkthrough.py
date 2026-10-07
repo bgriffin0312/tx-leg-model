@@ -33,6 +33,12 @@ REFIT.update({"intercept": -0.0322, "dem_pres_2p_baseline": 0.9759, "dem_incumbe
 COEF_SETS = {"master": MASTER, "refit": REFIT}
 
 
+# The pre-2026-10-07 model's TX Hispanic constant, deleted from model_config when
+# the demographic term was removed; kept here so the walkthrough can still show
+# the old line next to the new one.
+OLD_HISPANIC_CONST = -0.05
+
+
 def load(baseline):
     os.environ["TXLEG_BASELINE"] = baseline
     import contextlib, io
@@ -69,7 +75,7 @@ def main():
     shares = {r: float(row0[c]) / 100 for r, c in (("white_nh", "pct_white_nh"), ("black_nh", "pct_black_nh"),
                                                     ("hispanic", "pct_hispanic"), ("other", "pct_other"))}
     demo_dev = sum(shares[r] * rg[r] for r in shares) - nat_avg
-    hisp_const = mc.TX_HISPANIC_ADJUSTMENT * hisp
+    hisp_const = OLD_HISPANIC_CONST * hisp
     dem_inc = 1.0 if (row0["incumbent_party"] == "D" and str(row0.get("open_seat", "")).lower() not in ("true", "1")) else 0.0
     rep_inc = 1.0 if (row0["incumbent_party"] == "R" and str(row0.get("open_seat", "")).lower() not in ("true", "1")) else 0.0
     sen = 1.0 if args.chamber == "senate" else 0.0
@@ -80,7 +86,7 @@ def main():
     print(f"  CVAP shares: white {shares['white_nh']:.1%}  Black {shares['black_nh']:.1%}  "
           f"Hispanic {shares['hispanic']:.1%}  other {shares['other']:.1%}")
     print(f"  demo level term  = sum(share x national D by race) - national avg = {demo_dev * 100:+.2f}pp")
-    print(f"  Hispanic constant = {mc.TX_HISPANIC_ADJUSTMENT} x {hisp:.3f} = {hisp_const * 100:+.2f}pp")
+    print(f"  Hispanic constant = {OLD_HISPANIC_CONST} x {hisp:.3f} = {hisp_const * 100:+.2f}pp")
     print(f"  incumbency flags: dem_inc {dem_inc:.0f}, rep_inc {rep_inc:.0f}")
     bases = {}
     for b, df in frames.items():

@@ -1,10 +1,36 @@
-# DECISION PENDING — coefficient refit and baseline source (written 2026-09-10)
+# DECIDED 2026-10-07 — coefficient refit and baseline source
 
-Brennan intends to take this decision over the weekend of 2026-09-12/13.
-Nothing here is adopted; the model still publishes master coefficients on the
-presidential baseline with the demographic term in place.
+**Brennan's decision, 2026-10-07:** (1) adopt the refit pass-through and sigma 0.044,
+(2) adopt the open-race baseline, (3) delete the demographic level term and the
+Hispanic constant, (4) test incumbency and finance separately before adopting them,
+and fix the duplicate-report bug in the training data first.
 
-**Start here next session.** This file is the step-by-step review. The
+**What was done** (`scripts/refit_clean_cycles.py`; values in `src/model_config.py`):
+- Training data rebuilt with corrected TEC reports deduplicated (finance and IE)
+  and the August incumbent-filing fix applied to 2018/2022, which the old files
+  predated (sitting incumbents such as Flynn, Guerra, Raymond and Moody had $0).
+- Refit on the open-race baseline, clean midterms 2014/2018/2022: pass-through
+  1.058, env 0.0046/pp, sigma 0.044 (kept per Brennan; open-baseline LOO says
+  ~0.031 on three cycles).
+- Incumbency tested out of sample: kept, but small (D +1.2pp, R incumbent +1.3pp
+  toward D; open seats run slightly R). Master's +6.8 / −8.0pp imposed on the clean
+  data scores a held-out RMSE of 9.6pp vs 3.2pp.
+- Finance: viability flag kept (signed, +1.1pp, neutral out of sample);
+  fundraising share dropped (worse out of sample on every measure).
+- IE re-estimated on these terms: 0.0089.
+- WAR recomputed on the open baseline with a genuine no-finance fit and a cycle
+  fixed effect (presidential years missed by −2.3 / +2.4pp).
+- Result at D+9.2: House 66.9 seats / 12.8% majority (was 66.2 / 10.4%), Senate
+  11.1 / 0.3%. Open R seats fell (HD 94 64→22%, HD 93, SD 11), incumbent-held R
+  seats rose (HD 34, 121, 112, 52, 37).
+
+The correlated group-error layer (item 3's second half) was built the same day;
+see NEXT-STEPS. With it: House 66.7 / 12.5%. A midterm education term and an
+education split in that layer were then adopted (NEXT-STEPS): House 66.1 / 13.1%,
+Senate 11.1 / 0.2%. Coefficients in use are REGRESSION_COEFFICIENTS_EDU. Everything below is the pre-decision review, kept as the
+record of how the choice was framed.
+
+**Pre-decision review (2026-09-10).** This was the step-by-step review. The
 evidence behind it is in `docs/statewide-proxy-findings.md` (tests 1–3b and
 the AG anchor) and `docs/poll-integration-proposal.md` (§5–6, the demographic
 term backtests). Reproduce any district with:
@@ -171,9 +197,14 @@ HD 34 ≈ 43%.
 
 ## What else touches this
 
-- The generic-ballot dial (D+9.1) is ~1.5pp too Democratic against every
-  external read (NEXT-STEPS). It pushes the opposite way from the refit and
-  should be set in the same pass.
+- The generic-ballot dial: refreshed 2026-10-07 to D+9.2 from 11 national
+  race-banner polls, in line with Silver Bulletin (D+8.9 raw / D+9.6 LV). This
+  replaces a September note calling D+9.1 "~1.5pp too Democratic"; the
+  environment has since moved to meet it, so it no longer offsets the refit.
+- Added 2026-10-07: IE coefficient cut 0.074 → 0.026 on master (re-estimate on
+  the refit's terms if adopted), and the training data double-counts corrected
+  TEC reports (+9–19% of dollars; 13 House challengers' viability flags flip
+  deduped) — rebuild `phase1_dataset` with the dedup before refitting.
 - The Texas group-shift term (proposal §3a) is shelved pending UT's October
   LV wave; the AG anchor says the national Hispanic rebound should not be
   applied to Texas.

@@ -275,33 +275,6 @@ def build_backtest_df(config: dict, chamber: str,
 # Compute model predictions (mirrors model.py logic)
 # ---------------------------------------------------------------------------
 
-def compute_demo_baseline(df: pd.DataFrame, race_generic: dict[str, float],
-                           nat_weights: dict[str, float]) -> pd.Series:
-    """Σ(CVAP_pct × race_D_share) for each district."""
-    national_avg = sum(nat_weights[r] * race_generic[r] for r in nat_weights)
-
-    results = []
-    for _, row in df.iterrows():
-        w_nh  = row["pct_white_nh"]  or 0.0
-        b_nh  = row["pct_black_nh"]  or 0.0
-        hisp  = row["pct_hispanic"]  or 0.0
-        other = row["pct_other"]     or 0.0
-
-        # Already in 0-1 range from build_backtest_df
-        total = w_nh + b_nh + hisp + other
-        if total > 0:
-            w_nh /= total; b_nh /= total; hisp /= total; other /= total
-            demo_d = (w_nh   * race_generic["white_nh"] +
-                      b_nh   * race_generic["black_nh"] +
-                      hisp   * race_generic["hispanic"] +
-                      other  * race_generic["other"])
-        else:
-            demo_d = national_avg  # fallback: no CVAP data
-        results.append(demo_d)
-
-    return pd.Series(results, index=df.index)
-
-
 def build_linear_predictions(df: pd.DataFrame, config: dict) -> pd.Series:
     """
     Compute linear (deterministic) model prediction for each district.
@@ -314,8 +287,8 @@ def build_linear_predictions(df: pd.DataFrame, config: dict) -> pd.Series:
 
     national_avg = sum(nat_weights[r] * race_generic[r] for r in nat_weights)
 
-    demo_baseline  = compute_demo_baseline(df, race_generic, nat_weights)
-    demo_deviation = demo_baseline - national_avg
+    # Demographic level term and TX Hispanic constant deleted 2026-10-07 to
+    # mirror model.py (see the note in model.build_linear_predictions).
 
     pres_baseline = pd.to_numeric(df["dem_pres_2p_baseline"], errors="coerce")
     chamber_senate = (df["chamber_lower"] == "senate").astype(int)
@@ -338,18 +311,11 @@ def build_linear_predictions(df: pd.DataFrame, config: dict) -> pd.Series:
     predicted = (
         coefs["intercept"]
         + coefs["dem_pres_2p_baseline"] * pres_baseline.fillna(national_avg)
-        + demo_deviation
         + coefs["national_env"] * env_dial
         + coefs["dem_incumbent"] * df["dem_incumbent"]
         + coefs["rep_incumbent"] * df["rep_incumbent"]
         + coefs["chamber_senate"] * chamber_senate
     )
-
-    # TX-specific Hispanic voting adjustment
-    tx_hisp_adj = config.get("tx_hispanic_adjustment", 0)
-    if tx_hisp_adj != 0:
-        hisp_pct = pd.to_numeric(df.get("pct_hispanic", 0), errors="coerce").fillna(0)
-        predicted += tx_hisp_adj * hisp_pct
 
     # WAR persistence (mirrors model.py dual-track logic)
     war_persistence = config.get("war_persistence_coef", 0.46)

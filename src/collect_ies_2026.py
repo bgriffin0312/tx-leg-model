@@ -69,6 +69,7 @@ from collect_finance import (
     _tec_extract_file,
     _name_match,
     _normalize_name,
+    superseded_report_ids,
     TEC_ZIP_URL,
     TEC_ENCODING,
 )
@@ -517,6 +518,13 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
     text = data.decode(TEC_ENCODING, errors="replace")
     reader = csv.DictReader(io.StringIO(text))
 
+    # A corrected report re-itemizes every expenditure under a new
+    # reportInfoIdent while TEC keeps the original, so the same spending
+    # appears twice. Drop items whose report was superseded (see
+    # collect_finance_2026.latest_reports_only). 2026-10-07: $350K of 2026
+    # legislative DCE, incl. $59,683 of RPT spending in SD 4.
+    superseded = superseded_report_ids(cd)
+
     # Load filer party lookup
     filer_parties = _load_dce_filer_parties()
 
@@ -524,7 +532,11 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
     skipped = 0
     unclassified_filers = defaultdict(float)
 
+    rows_superseded = 0
     for row in reader:
+        if row.get("reportInfoIdent", "") in superseded:
+            rows_superseded += 1
+            continue
         office = row.get("candidateSeekOfficeCd", "").strip().upper()
         chamber = OFFICE_CODES.get(office)
         if chamber is None:
@@ -599,6 +611,7 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
     print(f"  Parsed {len(rows)} DCE records for TX legislative races (2026 cycle)")
     if skipped:
         print(f"  Skipped {skipped} rows (other offices, dates, or missing data)")
+    print(f"  Dropped {rows_superseded} rows on superseded (corrected) reports")
 
     # Report unclassified filers
     if unclassified_filers:
@@ -910,7 +923,7 @@ def main():
         # touching the network, so a stale/blocked TEC endpoint doesn't stop
         # a re-classification run against already-downloaded data.
         from collect_finance import FINANCE_CACHE
-        cd = {f: {} for f in ("spacs.csv", "cand.csv", "expend_01.csv")
+        cd = {f: {} for f in ("spacs.csv", "cand.csv", "cover.csv", "expend_01.csv")
               if (FINANCE_CACHE / f"tec_{f}").exists()}
         if cd:
             print(f"  TEC endpoint unavailable — using cached members: {sorted(cd)}")

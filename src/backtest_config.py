@@ -124,7 +124,7 @@ BACKTEST_CONFIGS: dict[int, dict] = {
             "Racial crosstabs from Catalist validated voter estimates."
         ),
         # TX-specific Hispanic adjustment (see model_config.py for explanation)
-        "tx_hispanic_adjustment": -0.05,
+        "tx_hispanic_adjustment": 0.0,  # constant deleted 2026-10-07 (no longer read by backtest.py)
 
         "source": "Catalist whathappened2022, Pew validated voters July 2023, TEC finance 2022",
         "updated": "2026-04-09",
@@ -189,7 +189,7 @@ BACKTEST_CONFIGS: dict[int, dict] = {
         # TX-specific Hispanic adjustment (same coefficient; pre-2020 realignment
         # may mean the actual gap was smaller in 2018, but no TX-specific validated
         # data exists to calibrate separately)
-        "tx_hispanic_adjustment": -0.05,
+        "tx_hispanic_adjustment": 0.0,  # constant deleted 2026-10-07 (no longer read by backtest.py)
 
         "notes": (
             "2018 used pre-2021 redistricting maps (PlanH2100/PlanS2100). "

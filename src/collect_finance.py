@@ -446,6 +446,49 @@ def _parse_tec_filers(filers_data: bytes) -> dict:
     return filers
 
 
+def latest_reports_only(rows) -> list[dict]:
+    """
+    Drop superseded copies of corrected reports.
+
+    When a filer corrects a report, TEC keeps the original AND the correction
+    as separate cover rows (new reportInfoIdent, same filer and period), so
+    summing every row counts the money twice. Measured 2026-10-07 among
+    legislative filers: excess dollars 2014 18.6%, 2018 13.1%, 2022 9.4%,
+    2026 7.8% (e.g. Rehmet's 2026 July semi-annual filed 7/15 and 7/17,
+    $380,152 each). Keep the latest-filed row per (filer, periodStart, periodEnd).
+    """
+    latest: dict[tuple, dict] = {}
+    for row in rows:
+        key = (row.get("filerIdent", "").strip() or row.get("filerName", "").strip(),
+               row.get("periodStartDt", "").strip(),
+               row.get("periodEndDt", "").strip())
+        rank = (row.get("filedDt", "").strip(), row.get("reportInfoIdent", "").strip())
+        prev = latest.get(key)
+        if prev is None or rank > (prev.get("filedDt", "").strip(),
+                                   prev.get("reportInfoIdent", "").strip()):
+            latest[key] = row
+    return list(latest.values())
+
+
+def superseded_report_ids(cd: dict) -> set[str]:
+    """
+    reportInfoIdents replaced by a later-filed correction, for filtering
+    itemized files (expend_*.csv, cand.csv): a corrected report re-itemizes
+    every line under its new reportInfoIdent while the original stays in.
+    Returns an empty set (with a warning) if cover.csv cannot be read.
+    """
+    cover_fname = next((f for f in cd if f.lower().endswith("cover.csv")), None)
+    data = _tec_extract_file(TEC_ZIP_URL, cd[cover_fname], cover_fname) if cover_fname else None
+    if not data:
+        print("  WARNING: cover.csv unavailable — superseded reports NOT dropped")
+        return set()
+    rows = list(csv.DictReader(io.StringIO(data.decode(TEC_ENCODING, errors="replace"))))
+    keep = {r.get("reportInfoIdent", "") for r in latest_reports_only(rows)}
+    gone = {r.get("reportInfoIdent", "") for r in rows} - keep
+    print(f"  Superseded (corrected) reports to drop from itemized files: {len(gone):,}")
+    return gone
+
+
 def _parse_tec_cover_direct(cover_data: bytes, years: list[int]) -> dict:
     """
     Parse TEC cover.csv filtering directly by filerSeekOfficeCd (STATEREP/STATESEN).
@@ -459,7 +502,7 @@ def _parse_tec_cover_direct(cover_data: bytes, years: list[int]) -> dict:
     cycle_windows = {yr: (ELECTION_CYCLE_START[yr], ELECTION_CYCLE_END[yr]) for yr in years}
 
     text = cover_data.decode(TEC_ENCODING, errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
+    reader = latest_reports_only(csv.DictReader(io.StringIO(text)))
 
     rows_kept = 0
     for row in reader:

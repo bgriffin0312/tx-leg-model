@@ -32,6 +32,7 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
   - Silver Bulletin generic ballot tracker
   - RealClearPolitics average
 """
+import os
 
 # ---------------------------------------------------------------------------
 # Generic Ballot by Race (D two-party share)
@@ -49,27 +50,27 @@ NATIONAL TOPLINE SOURCES (for detecting >1pp shifts):
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4789,
+    "white_nh": 0.4778,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8755,
+    "black_nh": 0.8569,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.6278,
+    "hispanic": 0.6327,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.4508,
+    "other": 0.4720,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "Multi-source 3-poll racial avg + 0 topline-only"
-GENERIC_BALLOT_UPDATED = "2026-08-15"  # ISO date
+GENERIC_BALLOT_SOURCE = "Multi-source 11-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_UPDATED = "2026-10-07"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5455  # D+9.1pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5458  # D+9.2pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)
@@ -105,50 +106,73 @@ NATIONAL_DEMO_WEIGHTS: dict[str, float] = {
 # with RRC winning outright in 2022, the only post-straight-ticket cycle.
 # The judicial mean was worse than both in every cycle and is not offered.
 #
-# Switching this does NOT refit REGRESSION_COEFFICIENTS below, which were fit
-# on the presidential baseline (pass-through 0.596 on mismatched geography;
-# ~0.99 on clean cycles). Pooled clean-cycle pass-through is 1.07 for RRC and
-# 1.04 for the blend. Decide the baseline together with the refit.
-BASELINE_SOURCE: str = "pres"
+# ADOPTED 2026-10-07 (Brennan): "open". REGRESSION_COEFFICIENTS below are fit
+# on this baseline (scripts/refit_clean_cycles.py), so the two go together.
+BASELINE_SOURCE: str = "open"
 
 # ---------------------------------------------------------------------------
 # Phase 1 Regression Coefficients (from run_phase1_regression.py)
 # ---------------------------------------------------------------------------
-# These come from the FULL model (with finance) in output/phase1_regression_summary.txt.
-# Update after re-running the regression with the presidential baseline.
+# CLEAN-CYCLE REFIT ON THE OPEN-RACE BASELINE, adopted 2026-10-07 (Brennan).
+# scripts/refit_clean_cycles.py: contested races of the clean-vintage midterms
+# 2014/2018/2022, each scored against the prior presidential year's open-race
+# composite on the lines the race ran under; n=212 with finance. Training data
+# rebuilt the same day with corrected TEC reports deduplicated and the August
+# incumbent-filing fix applied to 2018/2022 (see NEXT-STEPS 2026-10-07).
 #
-# Current values are from the RESTRICTED model (no presidential baseline yet).
-# After Task 4 (refit with presidential baseline), update with new coefficients.
+# Why not the old values (intercept 0.178, pass-through 0.596, dem_inc +6.8,
+# rep_inc -8.0, viability 4.5, share 7.3pp, sigma 0.074): they were fit with a
+# baseline on the wrong district geography for every cycle before 2022, which
+# attenuated the pass-through and pushed the slack into the intercept and the
+# incumbency terms. Imposing those incumbency/finance values on the clean data
+# gives a held-out RMSE of 10.5pp against 3.2pp for the refit.
+#
+# Each block was tested out of sample (leave-one-cycle-out), per Brennan:
+#   incumbency      kept: held-out RMSE 3.64 -> 3.37pp on all 259 races. Small,
+#                   and both signs D-ward: open seats run ~1.3pp more R than
+#                   baseline in competitive districts; incumbents of either
+#                   party a little more D.
+#   viability flag  kept: neutral out of sample, +1.1pp (t 1.6). Fit SIGNED
+#                   (+1 viable D vs R incumbent, -1 viable R vs D incumbent),
+#                   matching how model.py applies it; training had stored it
+#                   unsigned, which scored 4 viable R challengers as pro-D.
+#   fundraising share  DROPPED (set 0): worse out of sample on every measure.
+#   IE              kept at the refit estimate (IE_COEFFICIENT below, +0.9pp
+#                   per unit share): neutral out of sample.
+#
+# sigma: 0.044 is the forecast sigma from the branch's leave-one-cycle-out over
+# five clean cycles (national 0.0339 / idio 0.0280) -- Brennan's choice. The
+# open-baseline LOO over three midterms gives ~0.031, but two of its three
+# held-out "cycles" carry the national term, so 0.044 is kept as the safer
+# value.
 
 REGRESSION_COEFFICIENTS: dict[str, float] = {
-    # From FULL model with presidential baseline (run_phase1_regression.py output)
-    # n=268 contested races with full data (presidential + finance)
-    # R²=0.7953, Residual SE=0.0742
-    #
-    # REFIT 2026-07-20: the wikilink parser fix restored 34 mislabeled
-    # incumbency flags in phase1_dataset, so the regression was re-run.
-    # Backtests old→new: 2022 Brier 0.0220→0.0214 (acc 99.0→97.9%),
-    # 2018 Brier 0.0800→0.0859 (acc 87.9% both) — a wash; adopted because
-    # the new fit uses corrected labels. Previous values: intercept 0.1520,
-    # pass-through 0.6604, dem_inc 0.0600, rep_inc −0.0739, senate −0.0261,
-    # viability 0.0393, share 0.0624, sigma 0.0785.
-    "intercept":                  0.1781,
-    "dem_pres_2p_baseline":       0.5962,
-    "dem_incumbent":              0.0676,
-    "rep_incumbent":             -0.0804,
-    "chamber_senate":            -0.0263,
-    # national_env: auto-selected based on FINANCE_DATA_THROUGH (see below).
-    # Pre-July: 0.0049 (with_pres model, less suppressed by finance collinearity)
-    # Post-July: 0.0025 (full model, when dem_fundraising_share is fully populated)
-    "national_env":               None,  # set automatically by _auto_select_env_coef()
-    "challenger_viability_flag":  0.0446,
-    # dem_fundraising_share: D raised / (D+R raised). From full model = +0.0731 per unit (0–1).
-    # NOTE: This coefficient is temporally unstable — early cycles (2002–2010): +0.22,
-    # late cycles (2014–2022): ~0.00. The full-model average is used here.
-    # Pre-primary party assignment is approximate (challenger_raised may include
-    # same-party primary opponents). Treat with caution until post-July TEC data.
-    "dem_fundraising_share":      0.0731,
-    "sigma":                      0.0742,  # residual SE from FULL model (for win probability CDF)
+    "intercept":                 -0.0334,
+    "dem_pres_2p_baseline":       1.0583,  # pass-through on the BASELINE_SOURCE column
+    "dem_incumbent":              0.0117,
+    "rep_incumbent":              0.0128,
+    "chamber_senate":             0.0095,
+    # national_env: set by _auto_select_env_coef() (both eras 0.0046 after refit).
+    "national_env":               None,
+    "challenger_viability_flag":  0.0109,  # SIGNED in training and in model.py
+    "dem_fundraising_share":      0.0,     # dropped 2026-10-07: fails out of sample
+    "sigma":                      0.0440,
+}
+
+# No-finance coefficients, for the WAR baseline (compute_war.predict_dem_share).
+# WAR is a residual against a replacement-level candidate, so the baseline must
+# exclude finance -- and must be a genuine no-finance FIT, not the full model
+# with terms deleted (that kept an intercept fit alongside them and left a
+# +2.3pp mean residual that party_sign turned into a pro-D thumb).
+# Same rows and baseline as above, no-finance sample, n=259.
+REGRESSION_COEFFICIENTS_NO_FINANCE: dict[str, float] = {
+    "intercept":            -0.0374,
+    "dem_pres_2p_baseline":  1.0668,
+    "dem_incumbent":         0.0102,
+    "rep_incumbent":         0.0154,
+    "chamber_senate":        0.0096,
+    "national_env":          0.0046,
+    "sigma":                 0.0288,
 }
 
 # ---------------------------------------------------------------------------
@@ -188,6 +212,21 @@ VIABILITY_THRESHOLD_SEMIJUL: dict[str, float] = {
     "senate": 135_000,
 }
 
+VIABILITY_THRESHOLD_OCT30: dict[str, float] = {
+    # Calibrated 2026-10-07 by scripts/calibrate_viability_threshold.py, on a
+    # classification criterion: the in-cycle threshold that best reproduces
+    # the full-cycle flag the regression trained on (non-incumbent raised
+    # >= $100K house / $250K senate), using election-year reports filed by
+    # the 30-day-before-general deadline + 2 days, 2014/2018/2022 pooled.
+    # The same criterion reproduces the SEMIJUL values above ($75-80K house,
+    # $140K senate), which is why it is trusted here.
+    #   House:  minimum errors (12 of 551) at $100K; $80K gives 16, $90K 15.
+    #   Senate: minimum (2 of 118) at $220K; $200K and $250K give 3. n is
+    #           small (~9-14 viable per cycle), so treat as approximate.
+    "house":  100_000,
+    "senate": 220_000,
+}
+
 # Auto-select the viability threshold era from FINANCE_DATA_THROUGH, the same
 # way the national_env coefficient switches (see below): July semi-annual data
 # should not be judged against thresholds calibrated to April war chests.
@@ -196,6 +235,8 @@ def _auto_select_viability_threshold() -> dict[str, float]:
         month = int(FINANCE_DATA_THROUGH.replace("-", "")[4:6])
     except (ValueError, IndexError):
         month = 1
+    if month >= 10:
+        return VIABILITY_THRESHOLD_OCT30
     return VIABILITY_THRESHOLD_SEMIJUL if month >= 7 else VIABILITY_THRESHOLD_POSTPRIMARY
 
 # The dict collectors should import; resolved at import time (below, after
@@ -205,11 +246,15 @@ VIABILITY_THRESHOLD: dict[str, float] = {}
 # ---------------------------------------------------------------------------
 # IE (Independent Expenditure) signal
 # ---------------------------------------------------------------------------
-# Coefficient from Phase 1 regression (full_ie model, n=102, p=0.012).
+# Coefficient history: 0.074 (102-row full_ie subsample) -> 0.026 (all 268
+# contested midterms, master terms; scripts/ie_meaning_backtest.py) -> 0.0089
+# (clean-cycle open-baseline refit, scripts/refit_clean_cycles.py), all on
+# 2026-10-07. The backtest found IE money is not a weakness signal: defended
+# favourites run at their baseline. On the refit terms it is close to zero.
 # ie_dem_share = D-favoring IEs / total IEs (0–1 scale; 0.5 = neutral/no IEs).
 # Additive effect: COEF * IE_WEIGHT * (ie_dem_share − 0.5)
-#   → full R-favor (0.0) shifts predicted share by −0.037pp
-#   → full D-favor (1.0) shifts predicted share by +0.037pp
+#   → full R-favor (0.0) shifts predicted share by −0.4pp at weight 1.0
+#   → full D-favor (1.0) shifts predicted share by +0.4pp
 #
 # IE_WEIGHT — scales signal based on how far along the cycle we are:
 #   0.5  post-runoff, May–June: early-cycle targeting, high primary noise
@@ -225,16 +270,16 @@ VIABILITY_THRESHOLD: dict[str, float] = {}
 #   After October filing → IE_WEIGHT = 1.0
 # !!! UPDATE IE_DATA_THROUGH WHEN RUNNING collect_ies_2026.py !!!
 
-IE_COEFFICIENT:   float = 0.074     # from full_ie regression (with_ie model p=0.000)
+IE_COEFFICIENT:   float = 0.0089    # clean-cycle open-baseline refit, 2026-10-07 (t 1.1); was 0.026 earlier that day, 0.074 before
 IE_MIN_THRESHOLD: float = 50_000    # $50K minimum total IEs for signal to apply
-IE_WEIGHT:        float = 0.75      # post-July semi-annual filing (was 0.5 post-runoff)
-IE_DATA_THROUGH:  str   = "2026-07-20"  # update when re-running collect_ies_2026.py
+IE_WEIGHT:        float = 1.0       # October 30-day-before reports in (was 0.75 post-July)
+IE_DATA_THROUGH:  str   = "2026-10-07"  # update when re-running collect_ies_2026.py
 
 # ---------------------------------------------------------------------------
 # Finance data currency
 # ---------------------------------------------------------------------------
-FINANCE_DATA_THROUGH = "2026-07-15"  # last TEC filing deadline captured (July semi-annual report)
-FINANCE_CUTOFF_POSTPRIMARY = "20260815"  # include all reports filed through today (July semi-annual + Aug 5 monthly PAC/IE reports)
+FINANCE_DATA_THROUGH = "2026-10-05"  # last TEC filing deadline captured (30-day-before-general report)
+FINANCE_CUTOFF_POSTPRIMARY = "20261007"  # include all reports filed through today (Oct 5 30-day-before-general reports)
 
 # ---------------------------------------------------------------------------
 # Auto-select national_env coefficient based on finance data currency
@@ -248,8 +293,8 @@ FINANCE_CUTOFF_POSTPRIMARY = "20260815"  # include all reports filed through tod
 # Set NATIONAL_ENV_COEF_OVERRIDE to force a specific value (bypasses auto).
 NATIONAL_ENV_COEF_OVERRIDE: float | None = None
 
-_ENV_COEF_WITH_PRES = 0.0049   # less suppressed by finance collinearity (2026-07-20 refit; was 0.0052)
-_ENV_COEF_FULL_MODEL = 0.0025  # full model with finance vars active (2026-07-20 refit; was 0.0027)
+_ENV_COEF_WITH_PRES = 0.0046   # 2026-10-07 clean-cycle open-baseline refit (was 0.0049); the two eras now agree
+_ENV_COEF_FULL_MODEL = 0.0046  # 2026-10-07 clean-cycle open-baseline refit (was 0.0025)
 
 def _auto_select_env_coef() -> float:
     """Select national_env coefficient based on FINANCE_DATA_THROUGH date."""
@@ -271,6 +316,52 @@ def _auto_select_env_coef() -> float:
     else:
         print(f"  Pre-July: using with_pres environment coefficient ({_ENV_COEF_WITH_PRES})")
         return _ENV_COEF_WITH_PRES
+
+# ---------------------------------------------------------------------------
+# Midterm education term — ADOPTED 2026-10-07 (Brennan)
+# ---------------------------------------------------------------------------
+# scripts/group_error_estimate.py --education / scripts/midterm_education_test.py:
+# against the open-race baseline, every clean midterm runs more Democratic in
+# districts with more college-educated white adults (+13.8/+17.1/+13.6 pp per
+# unit centered share in 2014/2018/2022). A fixed term for it passes the
+# out-of-sample test the race-only version failed: held-out RMSE 3.37→3.13pp on
+# all 259 races, 3.20→2.72pp on the shipped spec; adding race terms on top makes
+# it worse; on the PRESIDENTIAL baseline the effect is zero, i.e. it corrects a
+# blind spot of the downballot open-race composite.
+#     + white_col_centered × (white BA+ share of CVAP − Texas 0.201)
+# white BA+ share = CVAP white share × ACS white-NH 25+ BA+ rate
+# (src/collect_education_by_district.py). Whole spec refit with the term in.
+# On by default since 2026-10-07; TXLEG_EDU=0 turns it off for one run.
+REGRESSION_COEFFICIENTS_EDU: dict[str, float] = {
+    "intercept":                 -0.0360,
+    "dem_pres_2p_baseline":       1.0521,
+    "dem_incumbent":              0.0244,
+    "rep_incumbent":              0.0097,
+    "chamber_senate":             0.0110,
+    "national_env":               None,
+    "challenger_viability_flag":  0.0042,
+    "dem_fundraising_share":      0.0,
+    "white_col_centered":         0.1554,
+    "sigma":                      0.0440,
+}
+REGRESSION_COEFFICIENTS_NO_FINANCE_EDU: dict[str, float] = {
+    "intercept":            -0.0416,
+    "dem_pres_2p_baseline":  1.0648,
+    "dem_incumbent":         0.0231,
+    "rep_incumbent":         0.0116,
+    "chamber_senate":        0.0097,
+    "national_env":          0.0046,
+    "white_col_centered":    0.1603,
+    "sigma":                 0.0232,
+}
+IE_COEFFICIENT_EDU: float = 0.0122
+EDUCATION_TERM: bool = os.environ.get("TXLEG_EDU", "1") != "0"
+if EDUCATION_TERM:
+    REGRESSION_COEFFICIENTS.clear()
+    REGRESSION_COEFFICIENTS.update(REGRESSION_COEFFICIENTS_EDU)
+    REGRESSION_COEFFICIENTS_NO_FINANCE = dict(REGRESSION_COEFFICIENTS_NO_FINANCE_EDU)
+    IE_COEFFICIENT = IE_COEFFICIENT_EDU
+    print("  Education term on (midterm white-college term)")
 
 # Apply auto-selection at import time
 REGRESSION_COEFFICIENTS["national_env"] = _auto_select_env_coef()
@@ -314,28 +405,50 @@ ENV_SCENARIOS: list[int] = [-3, 0, 3, 5, 8]
 # are dropped from the baseline (WAR already incorporates fundraising ability).
 WAR_PERSISTENCE_COEF: float = 0.46
 
+# (TX_HISPANIC_ADJUSTMENT, the -0.05 x Hispanic-CVAP constant, was deleted
+# 2026-10-07 together with the demographic level term in model.py; it existed
+# to cancel a residual that term created. See model.build_linear_predictions.)
+
 # ---------------------------------------------------------------------------
-# TX-specific Hispanic voting adjustment
+# Correlated group-error layer (Monte Carlo), built 2026-10-07
 # ---------------------------------------------------------------------------
-# National racial crosstabs systematically overestimate Hispanic D support in TX.
-# 2022 backtest regression: error ~ +0.068 * hispanic_cvap_pct (p=0.057).
-# Full regression-implied adjustment is -0.07, but 2022 was peak Hispanic-R
-# divergence (inflation frustration).
+# docs/poll-integration-proposal.md §3e. Per simulation, one error per racial
+# group; each district moves by its CENTERED composition:
+#     group_err_d = Σ_r (share_dr − w_TX[r]) · ε_r,   ε_r ~ N(0, σ_r)
+# so a Hispanic miss moves the Valley together ("we lost all of it at once")
+# instead of district by district. Centering keeps the uniform part of any miss
+# in the national layer. Shares are normalized CVAP (other = Asian + AIAN +
+# other); w_TX is the statewide CVAP mix, computed in model.py from the 2024 ACS.
 #
-# 2018 backtest validation (Apr 11 2026, with proper 2014-2018 ACS CVAP under
-# H2100/S2100 districts and Mar-Jun 2018 polling crosstabs from 4 polls):
-#   adj=0.00  house_err=+5.9  brier=0.068  acc=90.1%
-#   adj=-0.04 house_err=+3.5  brier=0.066  acc=92.1%
-#   adj=-0.07 house_err=+1.6  brier=0.065  acc=91.1%
-# A structural Hispanic gap was already present in 2018 — pre-realignment, in
-# a Beto wave year. The pure-cyclical "LIFO" interpretation is not supported.
+# σ per spec "estimate, report next to the prior, use the larger"
+# (scripts/group_error_estimate.py, five clean cycles 2014–2024, net of
+# sampling noise; only differences from white are identified):
+#   Black − white    estimate 1.9   prior √(4²+2.5²)=4.7   → prior
+#   Hispanic − white estimate 3.5   prior √(4.5²+2.5²)=5.1 → prior
+#   other − white    estimate 8.9   prior √(6²+2.5²)=6.5   → estimate (2018's
+#                    Asian-suburb swing); σ_other = √(8.9²−2.5²) = 8.6
+# The variance the layer adds is CARVED OUT of σ_idio, not stacked on it, so
+# total district σ stays at REGRESSION_COEFFICIENTS["sigma"] on average.
 #
-# -0.05 chosen as compromise: 2018 evidence supports a real structural gap
-# beyond the 2022 cyclical spike, but going to -0.07 risks overcorrecting if
-# 2026 sees Hispanic D reversion.
-# At -0.05: 50% Hispanic district shifts -2.5pp, 80% district shifts -4.0pp.
-# Set to 0.0 to disable.
-TX_HISPANIC_ADJUSTMENT: float = -0.05
+# A FIXED midterm composition term was tested alongside (scripts/
+# midterm_composition_test.py: midterm residuals do lean R with Black/Hispanic
+# share) and rejected: worse out of sample on all 259 races (RMSE 3.37→3.65pp).
+GROUP_ERROR_ENABLED: bool = True
+GROUP_ERROR_SIGMA: dict[str, float] = {
+    "white":    0.025,
+    "black":    0.040,
+    "hispanic": 0.045,
+    "other":    0.086,
+    # Used only when GROUP_ERROR_EDUCATION splits white by BA+. Within midterms
+    # the college/non-college gap barely varies cycle to cycle (net estimate
+    # ~0), so these are priors: non-college whites are the group national
+    # polls missed in 2016 and 2020, hence the larger σ.
+    "white_col":    0.025,
+    "white_noncol": 0.035,
+}
+# Split the white group by education in the error layer. Adopted 2026-10-07
+# (Brennan); TXLEG_EDU_ERR=0 turns it off for one run.
+GROUP_ERROR_EDUCATION: bool = os.environ.get("TXLEG_EDU_ERR", "1") != "0"
 
 # Monte Carlo simulation count
 N_SIMULATIONS: int = 10_000

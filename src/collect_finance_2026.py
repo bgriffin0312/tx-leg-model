@@ -52,6 +52,7 @@ from collect_finance import (
     _tec_extract_file,
     _normalize_name,
     _name_match,
+    latest_reports_only,
     TEC_ZIP_URL,
     TEC_ENCODING,
 )
@@ -95,7 +96,7 @@ def load_2026_cover(verbose: bool = False) -> dict:
         raise RuntimeError("Failed to download cover.csv from TEC ZIP.")
 
     text = cover_data.decode(TEC_ENCODING, errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
+    reader = latest_reports_only(csv.DictReader(io.StringIO(text)))
 
     OFFICE_CODES = {"STATEREP": "house", "STATESEN": "senate"}
 

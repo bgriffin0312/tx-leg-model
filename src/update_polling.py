@@ -25,7 +25,7 @@ WHICH POLLS HAVE RACIAL CROSSTABS — read this before trusting any list
 HARD-WIRED EXTRACTORS IN THIS FILE (a different thing from "has crosstabs"):
   1. Economist/YouGov weekly PDFs. Detection keys on the 'genericcongressional
      vote' table label — a YouGov-specific string, not a general detector.
-     Latest wired: 2026-08-28_to_31.
+     Latest wired: 2026-10-02_to_05.
   2. Marist/NPR PDFs. Latest wired: 2026-03-02 — STALE, verify before relying.
   3. Quinnipiac PDFs. Latest wired: 2025-12-17 — STALE.
   4. Manual CSV (data/raw/racial_crosstab_inputs.csv), which is where every
@@ -181,7 +181,7 @@ YOUGOV_PDFS = [
     # Keep ONE YouGov per aggregation run — including two back-to-back weeklies
     # double-counts the pollster's house effect. Use the most recent in-window
     # fielding and drop older ones once a fresher poll is available.
-    ("2026-08-28_to_31", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_yVe1kKt.pdf"),
+    ("2026-10-02_to_05", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_703uvs1.pdf"),
 ]
 
 
@@ -228,7 +228,10 @@ def _parse_yougov_pdf(pdf_bytes: bytes) -> dict | None:
 
     for page in pdf.pages:
         text = page.extract_text() or ""
-        if "genericcongressionalvote" not in text.lower():
+        # Table title was "Generic Congressional Vote" through Aug 2026 and
+        # "2026 Congressional Vote" from the Oct 2-5 2026 wave; the layout is
+        # unchanged. The TOC page also matches but has no banner rows.
+        if not re.search(r"(generic|2026)congressionalvote", text.lower().replace(" ", "")):
             continue
 
         lines = text.split("\n")

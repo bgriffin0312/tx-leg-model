@@ -70,6 +70,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from collect_finance import (
     _tec_zip_central_dir,
     _tec_extract_file,
+    superseded_report_ids,
     TEC_ZIP_URL,
     TEC_ENCODING,
 )
@@ -344,6 +345,8 @@ def load_pac_expenditures(cd: dict) -> list[dict]:
           f"for {len(PAC_FILER_IDS)} target PAC filers...")
 
     all_rows = []
+    superseded = superseded_report_ids(cd)
+    n_superseded = 0
     for fname in expend_files:
         data = _tec_extract_file(TEC_ZIP_URL, cd[fname], fname)
         if not data:
@@ -355,6 +358,9 @@ def load_pac_expenditures(cd: dict) -> list[dict]:
 
         file_count = 0
         for row in reader:
+            if row.get("reportInfoIdent", "") in superseded:
+                n_superseded += 1
+                continue
             filer_id = row.get("filerIdent", "").strip()
             if filer_id not in PAC_FILER_IDS:
                 continue
@@ -384,6 +390,7 @@ def load_pac_expenditures(cd: dict) -> list[dict]:
         if file_count:
             print(f"  {fname}: {file_count} rows from target PAC filers")
 
+    print(f"  Dropped {n_superseded:,} rows on superseded (corrected) reports")
     print(f"  Total PAC rows across all expend files: {len(all_rows):,}")
     return all_rows
 
@@ -677,8 +684,19 @@ def main():
     print("\nReading TEC ZIP central directory...")
     cd = _tec_zip_central_dir(TEC_ZIP_URL)
     if not cd:
-        print("ERROR: Could not read TEC ZIP central directory.")
-        sys.exit(1)
+        # Offline fallback (TEC intermittently 403s): _tec_extract_file serves
+        # cached members before touching the network, so run from the cache
+        # when every needed member is there.
+        from collect_finance import FINANCE_CACHE
+        cached = {p.name[len("tec_"):]: {} for p in FINANCE_CACHE.glob("tec_*.csv")}
+        n_exp = sum(1 for f in cached if re.match(r"expend_\d+\.csv", f))
+        if n_exp >= 13 and "cover.csv" in cached:
+            cd = cached
+            print(f"  TEC endpoint unavailable — using {len(cd)} cached members")
+        else:
+            print("ERROR: Could not read TEC ZIP central directory "
+                  f"(and cache incomplete: {n_exp}/13 expend files).")
+            sys.exit(1)
 
     if args.scan:
         scan_mode(cd)

@@ -139,6 +139,10 @@ path.
 
 ### 3e. Correlated group error in the Monte Carlo (required)
 
+> **Built 2026-10-07.** Estimates came in below the priors for Black and Hispanic
+> (kept the priors, per the rule below) and above for other (σ_other 8.6). The
+> carve-out and the validation check are in `model.run_monte_carlo`. See NEXT-STEPS.
+
 `run_monte_carlo` draws two layers: a national scalar per simulation and an
 idiosyncratic draw per district. Add a third, per simulation:
 

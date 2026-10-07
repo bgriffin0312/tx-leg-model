@@ -5,8 +5,7 @@ Phase 2 TX Legislative Election Projection Model
 
 Architecture:
   predicted_dem_share(district) =
-      presidential_baseline          ← 2024 pres Dem 2p share (from districts_2026.csv)
-    + race_adjusted_demo_deviation   ← Σ(CVAP_pct × race_D_share) − national_avg
+      pass_through × baseline        ← 2024 open-race D 2p share (BASELINE_SOURCE)
     + env_dial × national_env_coef   ← generic ballot swing, uniform across districts
     + incumbency_effect              ← Phase 1 regression coefficients
     + finance_effect                 ← challenger viability flag
@@ -73,8 +72,10 @@ from model_config import (
     IE_WEIGHT,
     IE_DATA_THROUGH,
     WAR_PERSISTENCE_COEF,
-    TX_HISPANIC_ADJUSTMENT,
     BASELINE_SOURCE,
+    GROUP_ERROR_ENABLED,
+    GROUP_ERROR_SIGMA,
+    GROUP_ERROR_EDUCATION,
 )
 
 _HAS_FUNDRAISING_SHARE = "dem_fundraising_share" in COEFS
@@ -113,6 +114,58 @@ SIGMA_NATIONAL = SIGMA_SPLITS[_sigma_split]["national"]
 SIGMA_IDIO     = SIGMA_SPLITS[_sigma_split]["idio"]
 
 RNG = np.random.default_rng(42)
+
+# Correlated group-error layer (model_config.GROUP_ERROR_*) and the staged
+# education term share one composition helper. Group order is fixed here and
+# used for both the shares and the sigmas.
+_GROUPS = ("white", "black", "hispanic", "other")
+_GROUPS_EDU = ("white_noncol", "white_col", "black", "hispanic", "other")
+
+
+def _group_shares(cvap: pd.DataFrame) -> np.ndarray:
+    """Normalized CVAP shares from COUNTS, other = Asian + AIAN + other (the same
+    definition scripts/group_error_estimate.py estimated the sigmas on)."""
+    m = np.column_stack([
+        cvap["cvap_white_nh"], cvap["cvap_black_nh"], cvap["cvap_hispanic"],
+        cvap["cvap_asian_nh"] + cvap["cvap_aian_nh"] + cvap["cvap_other"],
+    ]).astype(float)
+    return m / m.sum(axis=1, keepdims=True)
+
+
+def centered_group_shares(df: pd.DataFrame, education: bool = False) -> np.ndarray:
+    """(n_districts, 4 or 5) district CVAP share minus the Texas statewide share.
+
+    education=True splits white into non-college / college (BA+) using the ACS
+    white-NH 25+ BA+ rate on the current lines (src/collect_education_by_district.py).
+    Texas weights are the House districts' summed 2024 ACS CVAP. A district
+    with no CVAP row gets zeros (it moves only with the national layer)."""
+    groups = _GROUPS_EDU if education else _GROUPS
+    parts = []
+    for chamber in ("house", "senate"):
+        c = pd.read_csv(ROOT / "data" / "raw" / f"tx_cvap_{chamber}.csv")
+        c = c[c["chamber"].str.lower() == chamber].reset_index(drop=True)
+        sh = pd.DataFrame(_group_shares(c), columns=_GROUPS)
+        sh["district"] = c["district"].astype(int).values
+        sh["chamber_lower"] = chamber
+        if education:
+            e = pd.read_csv(ROOT / "data" / "raw" / f"tx_education_{chamber}_acs2024.csv")
+            sh = sh.merge(e[["district", "white_college_rate"]], on="district", how="left")
+            sh["white_col"] = sh["white"] * sh["white_college_rate"]
+            sh["white_noncol"] = sh["white"] - sh["white_col"]
+        if chamber == "house":
+            tot = c[["cvap_white_nh", "cvap_black_nh", "cvap_hispanic"]].sum().values
+            oth = (c["cvap_asian_nh"] + c["cvap_aian_nh"] + c["cvap_other"]).sum()
+            w = dict(zip(_GROUPS, np.append(tot, oth) / (tot.sum() + oth)))
+            if education:
+                rate = e.white_nh_ba_plus.sum() / e.white_nh_25p.sum()
+                w["white_col"], w["white_noncol"] = w["white"] * rate, w["white"] * (1 - rate)
+            w_tx = np.array([w[g] for g in groups])
+        parts.append(sh)
+    sh = pd.concat(parts, ignore_index=True)
+    key = df[["chamber_lower", "district"]].astype({"district": int})
+    merged = key.merge(sh, on=["chamber_lower", "district"], how="left")
+    centered = merged[list(groups)].to_numpy() - w_tx[np.newaxis, :]
+    return np.nan_to_num(centered, nan=0.0)
 
 # ---------------------------------------------------------------------------
 # WAR lookup helpers
@@ -277,6 +330,8 @@ def _apply_baseline_source(df: pd.DataFrame) -> pd.DataFrame:
     # the baselines can be compared without editing model_config.py.
     source = os.environ.get("TXLEG_BASELINE", str(BASELINE_SOURCE)).lower()
     if source == "pres":
+        print("  WARNING: baseline 'pres' but REGRESSION_COEFFICIENTS were fit on the "
+              "open-race baseline; see model_config.BASELINE_SOURCE")
         return df
     if source not in ("rrc", "blend", "open", "blend_open"):
         raise ValueError(f"BASELINE_SOURCE must be pres, rrc, blend, open or blend_open; got {source!r}")
@@ -309,8 +364,9 @@ def _apply_baseline_source(df: pd.DataFrame) -> pd.DataFrame:
     delta = (df["dem_pres_2p_baseline"] - old) * 100
     print(f"  Baseline source: {source} (2024 downballot replaces presidential; "
           f"mean shift {delta.mean():+.2f}pp, range {delta.min():+.1f} to {delta.max():+.1f})")
-    print("  WARNING: REGRESSION_COEFFICIENTS were fit on the presidential baseline; "
-          "see model_config.BASELINE_SOURCE")
+    if source != "open":
+        print("  WARNING: REGRESSION_COEFFICIENTS were fit on the open-race baseline; "
+              "see model_config.BASELINE_SOURCE")
     return df
 
 
@@ -363,60 +419,6 @@ def _attach_unopposed(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Compute district demographic baseline
-# ---------------------------------------------------------------------------
-
-def compute_demo_baseline(df: pd.DataFrame,
-                           race_generic: dict[str, float]) -> pd.Series:
-    """
-    For each district, compute Σ(CVAP_pct × race_D_share).
-    Returns a Series of district D shares implied by current racial polling.
-    Handles missing CVAP data by falling back to national average.
-    """
-    national_avg = sum(NATIONAL_DEMO_WEIGHTS[r] * race_generic[r]
-                       for r in NATIONAL_DEMO_WEIGHTS)
-
-    results = []
-    for _, row in df.iterrows():
-        w_nh   = _safe_pct(row.get("pct_white_nh"))
-        b_nh   = _safe_pct(row.get("pct_black_nh"))
-        hisp   = _safe_pct(row.get("pct_hispanic"))
-        other  = _safe_pct(row.get("pct_other"))
-
-        total = w_nh + b_nh + hisp + other
-        if total > 0:
-            # Normalize to sum to 1
-            w_nh /= total; b_nh /= total; hisp /= total; other /= total
-            demo_d = (w_nh   * race_generic["white_nh"] +
-                      b_nh   * race_generic["black_nh"] +
-                      hisp   * race_generic["hispanic"] +
-                      other  * race_generic["other"])
-        else:
-            demo_d = national_avg  # fallback
-
-        results.append(demo_d)
-
-    return pd.Series(results, index=df.index)
-
-
-def _safe_pct(val) -> float:
-    """Convert a CVAP percentage to a 0-1 fraction.
-
-    The old body guessed the units -- `v / 100.0 if v > 1.0 else v` -- which is
-    right for 71.2 and for 0.712, and wrong for every genuine sub-1% group. The
-    CVAP file is uniformly in percent (five groups sum to ~100; smallest value
-    0.09), so 17 rows had a group under 1.0 read as a whole percentage: HD 40's
-    0.78% Black CVAP became 78%, HD 34's 0.92% "other" became 92%.
-
-    There is nothing to detect. Divide.
-    """
-    try:
-        return float(val) / 100.0
-    except (TypeError, ValueError):
-        return 0.0
-
-
-# ---------------------------------------------------------------------------
 # Build linear prediction for each district
 # ---------------------------------------------------------------------------
 
@@ -434,8 +436,13 @@ def build_linear_predictions(df: pd.DataFrame,
     national_avg = sum(NATIONAL_DEMO_WEIGHTS[r] * race_generic[r]
                        for r in NATIONAL_DEMO_WEIGHTS)
 
-    demo_baseline = compute_demo_baseline(df, race_generic)
-    demo_deviation = demo_baseline - national_avg  # how much more D than national avg
+    # No demographic level term (deleted 2026-10-07, Brennan). It added
+    # Σ(CVAP × race D share) − national on top of a baseline that already
+    # carries each district's racial composition, double-counting it (+3.7pp
+    # mean, r = +0.70 with the baseline) and manufacturing the Hispanic-
+    # correlated residual the −0.05 TX_HISPANIC_ADJUSTMENT was fit to cancel;
+    # both are gone. Backtests: docs/poll-integration-proposal.md §5–6.
+    # Racial polling now feeds only the topline dial (GENERIC_BALLOT_TOPLINE_D_2P).
 
     # Presidential baseline (fixed 2024 result)
     pres_baseline = pd.to_numeric(df["dem_pres_2p_baseline"], errors="coerce")
@@ -523,7 +530,6 @@ def build_linear_predictions(df: pd.DataFrame,
     predicted = (
         COEFS["intercept"]
         + COEFS["dem_pres_2p_baseline"] * pres_baseline.fillna(national_avg)
-        + demo_deviation                                      # race-adjusted lean
         # env_dial is absolute D-R margin in pp, matching regression
         # training data (2018=8.6, 2022=-2.8, 2024=-3.2)
         + COEFS["national_env"] * env_dial                   # environment swing
@@ -532,15 +538,11 @@ def build_linear_predictions(df: pd.DataFrame,
         + COEFS["chamber_senate"] * chamber_senate
     )
 
-    # TX-specific Hispanic voting adjustment
-    # National crosstabs overestimate Hispanic D support in TX by ~7pp.
-    # Applied proportionally to each district's Hispanic CVAP share.
-    if TX_HISPANIC_ADJUSTMENT != 0:
-        hisp_pct = pd.to_numeric(df.get("pct_hispanic", 0), errors="coerce").fillna(0)
-        # Normalize: if stored as percentage (>1), convert to fraction
-        hisp_pct = hisp_pct.where(hisp_pct <= 1.0, hisp_pct / 100.0)
-        tx_hisp_adj = TX_HISPANIC_ADJUSTMENT * hisp_pct
-        predicted += tx_hisp_adj
+    # Staged midterm education term (model_config: EDUCATION_TERM / TXLEG_EDU=1).
+    if COEFS.get("white_col_centered"):
+        white_col_c = centered_group_shares(df, education=True)[:, _GROUPS_EDU.index("white_col")]
+        predicted = predicted + COEFS["white_col_centered"] * white_col_c
+
 
     # ---------------------------------------------------------------------------
     # Dual-track: WAR persistence (incumbents with career history) vs. finance
@@ -633,7 +635,8 @@ def build_linear_predictions(df: pd.DataFrame,
 def run_monte_carlo(df: pd.DataFrame,
                     env_dial: float,
                     race_generic: dict[str, float],
-                    n_sims: int = N_SIMULATIONS) -> dict:
+                    n_sims: int = N_SIMULATIONS,
+                    keep_wins: bool = False) -> dict:
     """
     Run Monte Carlo simulation for a single environment scenario.
 
@@ -653,15 +656,32 @@ def run_monte_carlo(df: pd.DataFrame,
     # Monte Carlo draws
     # Shape: (n_sims,) shared national error
     national_errors = RNG.normal(0, SIGMA_NATIONAL, size=n_sims)
-    # Shape: (n_districts, n_sims) idiosyncratic errors
-    idio_errors = RNG.normal(0, SIGMA_IDIO, size=(n_districts, n_sims))
 
-    # predicted[i, sim] = linear[i] + national_errors[sim] + idio_errors[i, sim]
-    # Broadcasting: linear is (n_districts,), national_errors is (n_sims,)
+    # Correlated group layer: one error per racial group per simulation, applied
+    # through each district's centered CVAP mix. Its average variance is carved
+    # out of σ_idio so the total stays at the regression σ (proposal §3e: "carve
+    # out, don't stack").
+    if GROUP_ERROR_ENABLED:
+        groups = _GROUPS_EDU if GROUP_ERROR_EDUCATION else _GROUPS
+        centered = centered_group_shares(df, GROUP_ERROR_EDUCATION)  # (n_districts, n_groups)
+        sig = np.array([GROUP_ERROR_SIGMA[g] for g in groups])       # (n_groups,)
+        group_eps = RNG.normal(0, sig, size=(n_sims, len(groups)))
+        group_errors = centered @ group_eps.T                      # (n_districts, n_sims)
+        mean_group_var = float(((centered ** 2) @ sig ** 2).mean())
+        idio_sd = float(np.sqrt(max(SIGMA_IDIO ** 2 - mean_group_var, 0.0)))
+    else:
+        group_errors = 0.0
+        mean_group_var = 0.0
+        idio_sd = SIGMA_IDIO
+    # Shape: (n_districts, n_sims) idiosyncratic errors
+    idio_errors = RNG.normal(0, idio_sd, size=(n_districts, n_sims))
+
+    # predicted[i, sim] = linear[i] + national[sim] + group[i, sim] + idio[i, sim]
     predicted_matrix = (
-        linear[:, np.newaxis]         # (n_districts, 1)
-        + national_errors[np.newaxis, :]  # (1, n_sims) → broadcasts to (n_districts, n_sims)
-        + idio_errors                 # (n_districts, n_sims)
+        linear[:, np.newaxis]             # (n_districts, 1)
+        + national_errors[np.newaxis, :]  # (1, n_sims)
+        + group_errors                    # (n_districts, n_sims)
+        + idio_errors                     # (n_districts, n_sims)
     )
 
     # Win if predicted > 0.5
@@ -691,6 +711,12 @@ def run_monte_carlo(df: pd.DataFrame,
         "senate_control_prob": (senate_seat_dist >= (SENATE_MAJORITY - _SENATE_D_HOLDOVER)).mean(),
         "expected_house_seats": house_seat_dist.mean(),
         "expected_senate_seats": senate_seat_dist.mean(),
+        # Validation (proposal §3e): sqrt(σ_nat² + E[Var(group)] + σ_idio²) should
+        # equal the regression σ.
+        "sigma_check": float(np.sqrt(SIGMA_NATIONAL ** 2 + mean_group_var + idio_sd ** 2)),
+        "sigma_group_rms": float(np.sqrt(mean_group_var)),
+        "sigma_idio_used": idio_sd,
+        **({"wins": wins} if keep_wins else {}),
     }
 
 
@@ -723,6 +749,10 @@ def print_scenario_summary(env_dial: float, result: dict, df: pd.DataFrame):
           f"({result['expected_senate_seats']:.1f} from 16 on ballot + {_SENATE_D_HOLDOVER} holdover, "
           f"need {senate_need} wins for majority)")
     print(f"  P(D controls Senate):      {result['senate_control_prob']*100:.1f}%")
+    hs = result["house_seat_dist"]
+    print(f"  House seats 10th–90th pct: {np.percentile(hs, 10):.0f}–{np.percentile(hs, 90):.0f}   "
+          f"σ check: nat {SIGMA_NATIONAL:.4f} + group {result['sigma_group_rms']:.4f} (rms) "
+          f"+ idio {result['sigma_idio_used']:.4f} → {result['sigma_check']:.4f}")
 
     # Show most competitive districts
     win_probs = result["district_win_probs"]

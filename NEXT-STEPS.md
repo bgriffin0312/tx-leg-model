@@ -5,84 +5,133 @@ either measured or explicitly flagged as unverified. Published artifacts in
 `output/` still reflect the **2026-08-18** model run; nothing from the audit has
 been republished.*
 
----
-
-## The one decision blocking everything else
-
-**→ Step-by-step review with worked districts: `docs/baseline-refit-decision.md`
-(2026-09-10). Brennan plans to decide over the weekend of 2026-09-12/13.**
-
-**Adopt, damp, or reject the clean-cycle coefficient refit** (branch
-`refit-clean-cycles`, commit message has the full reasoning).
-
-It is statistically cleaner and it makes a contestable bet:
-
-| | current (master) | refit (branch) |
-|---|---|---|
-| pass-through | 0.5962 | 0.9759 |
-| intercept | 0.1781 | −0.0322 |
-| sigma | 0.0742 | 0.0440 |
-| House D seats @ D+9.1 | 67.4 | 64.0 |
-| P(House majority) | 16.0% | 7.0% |
-
-At pass-through 0.98 every district is predicted at its **2024 presidential**
-number. In South Texas that number carries the Trump-era Latino swing, so the
-competitive list inverts — HD 34/41/74/36/37/42 take it over while HD 118 falls
-from 84.8% to 35.9% and the DFW seats drop off. But the 2024 *legislative*
-results show Democratic incumbents there still running well ahead of the top of
-the ticket (HD 74 Morales +9.1pp, HD 41 Guerra +4.3pp). **The refit bets that gap
-closes by 2026.** That is a claim about Texas politics, not statistics.
-
-**The baseline is now part of this decision (2026-09-10).** 2024 Railroad
-Commissioner and judicial-mean shares by district exist for both chambers
-(`data/raw/historical/tx_downballot_*_2024_*.csv`, plus 2012/2016/2020 on
-the plans the backtests use), and `model_config.BASELINE_SOURCE` /
-`TXLEG_BASELINE=rrc|blend` swaps them in. Leave-one-cycle-out on 2014/2018/2022
-(`scripts/baseline_backtest.py`, `docs/statewide-proxy-findings.md` test 3):
-the ½-presidential ½-open blend has the best residual sd and Brier, the
-open-race composite (statewide downballot races with no incumbent on either
-side — Brennan's rule; for 2024 that is the three CCA seats, not RRC, because
-Craddick was an incumbent) the best seat error and an outright win in 2022
-(Hispanic residual slope −0.085 → −0.002); judicial mean is out. Candidates
-are `open` and `blend_open`. Pass-through is ~1.0 for every baseline on
-clean cycles. Under master's 0.596 a downballot baseline *lowers* D seats
-(66.5 → 65.1 at D+9.1 for RRC) because the damped pass-through mutes the
-South Texas gain; under refit coefficients the structural model gains six
-seats. Decide baseline and pass-through together, on the refit branch.
-
-**AG race as the Texas generic ballot by race (2026-09-10,
-`scripts/ag_anchor_2026.py`):** the Texas-minus-national offset is −9 white,
-−4 Black, −11 Hispanic, i.e. mostly uniform; relative to white voters the
-Hispanic offset is −2 to +2pp, so there is no Hispanic-specific correction
-to make and the −0.05 constant has no 2026 support. The national Hispanic
-rebound since 2024 (+8.5pp) does not appear in Texas (+0.7 on the AG banner);
-the Texas-anchored centered shift is white +2.3 / Hispanic −3.2 on the
-August AG banner and ≈0 on the smoothed downballot mean. AG and Comptroller
-banners for Jun+Aug 2026 are now in `texas_crosstab_inputs.csv`.
-
-Two parts of the branch are *not* contested and can be adopted independently:
-- **WAR re-centering.** Mean baseline residual +2.464 → +0.279pp. Straightforwardly correct.
-- **The σ decomposition** (national 0.0339 / idio 0.0280, total 0.0440), which
-  also validated model.py's existing 58% shared-variance split at 59%.
+*2026-10-07: polls (11-pollster national race aggregate, D+9.2), October 30-day
+TEC reports and IEs are in, and the September refit decision was taken (open-race
+baseline, clean-cycle refit, demographic term deleted, training data deduplicated).
+With the group-error layer and the education term + error split: **66.1 House
+seats / 13.1% majority, Senate 11.1 / 0.2%** at D+9.2. Not republished. See the 2026-10-07 sections below.*
 
 ---
 
-## Highest-value single item outstanding
+## The refit decision — DECIDED 2026-10-07
 
-**The generic-ballot dial is ~1.5 points too Democratic.**
+Adopted: the open-race baseline, the clean-cycle refit (pass-through 1.058,
+env 0.0046, sigma 0.044), deletion of the demographic level term and the TX
+Hispanic constant, incumbency and the signed viability flag after out-of-sample
+tests (fundraising share dropped), IE re-estimated at 0.0089, WAR rebuilt on
+the open baseline with a cycle fixed effect. Full record, test results and the
+district-level consequences: `docs/baseline-refit-decision.md`. Branch
+`refit-clean-cycles` is superseded (its WAR re-centering is folded in).
 
-`GENERIC_BALLOT_TOPLINE_D_2P = 0.5455` (D+9.1). Every external check disagrees:
+Still open from the September recommendation:
+- ~~**Correlated group-error layer**~~ — **built 2026-10-07** (`model.run_monte_carlo`,
+  `model_config.GROUP_ERROR_*`). σ white/Black/Hispanic/other 2.5/4/4.5/8.6pp:
+  priors kept where larger than the five-cycle estimate
+  (`scripts/group_error_estimate.py`), "other" from the estimate (2018 Asian-suburb
+  swing). Variance carved out of σ_idio; check √(0.0335²+0.0139²+0.0249²)=0.0440.
+  Effect at D+9.2 (`scripts/group_error_compare.py`): House 66.9→66.7 seats,
+  12.7→12.2% majority, sd 7.80→7.94; Valley eight-seat block sd 1.81→2.01 and
+  P(D loses all eight) 2.6%→5.4%.
+- **Education — ADOPTED 2026-10-07 (Brennan: both on).** District white BA+ data
+  now exists (`src/collect_education_by_district.py`, keyless ACS table-based
+  summary files; 2021 ACS = pre-2022 lines, 2024 ACS = current). Both on by default (`TXLEG_EDU=0` / `TXLEG_EDU_ERR=0` turn them off for one run):
+  the error layer splits white by education (σ non-college
+  3.5 / college 2.5, priors); and a fixed midterm term is added
+  (`REGRESSION_COEFFICIENTS_EDU`, +15.5pp per unit centered white-BA+ share, t 10).
+  The term passes out of sample (`scripts/midterm_education_test.py`: RMSE
+  3.37→3.13 / 3.20→2.72pp) because it fixes a 3.4pp pro-R miss in the most
+  college-educated fifth of seats; it is zero on the presidential baseline (an
+  open-race-composite blind spot). Side effect: it moves Valley seats R
+  (HD 118 74→53%, HD 41 83→67%, HD 34 66→50%); held out, the Valley miss flips
+  +1.0→−0.8pp, i.e. neutral within noise (n≈27, RMSE ~4pp), and a Hispanic term
+  does not help. At D+9.2: off 66.7/12.5% · error split 66.8/13.2% · term 66.0/12.6%
+  · both 66.1/13.1%. Finer race × education cells (Hispanic and Black split by
+  BA+ too) were tested and do worse out of sample at every step — RMSE 3.13 →
+  3.52 → 3.85 (`midterm_education_test.py --race-edu`); district results can't
+  identify them. White education only is the right granularity for this data.
+- **Midterm composition pattern** found while estimating it: every clean midterm
+  runs R of the open baseline in proportion to Black and Hispanic share
+  (turnout drop-off from a presidential-year baseline, most likely). A fixed term
+  for it was tested and rejected — worse out of sample on all 259 races
+  (`scripts/midterm_composition_test.py`). Re-test when 2026 results exist.
+- **Sigma**: 0.044 kept by choice; the open-baseline leave-one-cycle-out on three
+  midterms says ~0.031. Revisit if more clean cycles become available.
+- **Wave-year level**: held out, 2018 (D+8.6) is under-predicted for Democrats by
+  ~1.2pp under the shipped spec. 2026 sits at D+9.2, so the same miss is plausible.
+- **Presidential-year cycles** miss by −2.3 (2020) / +2.4pp (2024) — absorbed in
+  WAR by the cycle fixed effect, but a sign the env coefficient is midterm-only.
 
-| source | value |
-|---|---|
-| your own unapplied `update_polling.py` refresh | **D+7.4** |
-| Silver Bulletin, LV-adjusted (2026-09-09) | **D+7.6** |
-| Silver Bulletin raw | D+6.6 |
-| FiftyPlusOne / RCP / VoteHub / Race to the WH | D+5.6 – D+6.5 |
+---
 
-This dial shifts **all 166 races**. It is a bigger effect than most of what the
-audit fixed, and the correction is already computed and one command away. Do not
-decide it separately from the refit above — they push in opposite directions.
+## Polling refresh (2026-10-07)
+
+11 national releases fielded Sep 7–Oct 7 carried a W/B/H generic banner
+(Economist/YouGov, Emerson, Quantus, Big Data, NYT/Siena, Echelon, Zogby,
+Rainey, McLaughlin, Morning Consult, Marquette); recorded with the misses in
+`config/pollster_registry.csv`. Aggregate topline 54.6% (D+9.2) vs. Silver
+Bulletin D+8.9 raw / D+9.6 LV — the August-15 values had drifted back into line,
+so the dial barely moved. YouGov's table was retitled "2026 Congressional
+Vote" in October, which silently broke the extractor; fixed. Texas: no new
+Legislature generic since UT August; NYT/Siena (9/21–30) and ReconMR (9/8–11)
+US-House generics put Texas Hispanic D2p at ~66% vs. UT's 53% in August —
+added to `texas_crosstab_inputs.csv` with TSU AG/Comptroller banners.
+
+## The IE term overstates what IE money means (2026-10-07)
+
+**Decided 2026-10-07 (Brennan): `IE_COEFFICIENT` set to 0.026**, then re-estimated
+the same day on the adopted refit's terms at **0.0089** (neutral out of sample).
+The findings below still describe what IE money signals.
+
+With the October 30-day reports in, every competitive R-held House seat now
+carries $65K–$520K of one-sided Republican IE money. The model reads that as
+−3.7pp for the Democrat in each seat (HD 129 35%→9%, HD 96 51%→30%, HD 94
+67%→52%). **The whole −0.9 House-seat drop from the October money comes from
+this term**; with it zeroed, the new finance data leaves the forecast at 66.5.
+
+`scripts/ie_meaning_backtest.py` tests what IE money signalled on the training
+rows (268 contested midterm races, 2002–2022, 45 with ≥$50K of IE):
+
+- **It is not a weakness signal.** Favourites whose side got ≥75% of the IE
+  money ran +0.15pp vs. the no-IE model (se 0.9) and were upset *less* often
+  than expected (7% vs. 16%). In base-model toss-ups, defended favourites ran
+  +1.9pp (se 1.3, n=16).
+- **But it is not a 3.7pp push either.** Fit on all 268 rows with the
+  master terms, the IE coefficient is **+0.026 (t 1.1)**. The 0.074 in config
+  came from the `full_ie` regression on a 102-row subsample with a different
+  specification (pres pass-through 0.36), bolted onto coefficients fit
+  elsewhere.
+- **Context matters a bit:** the slope is concentrated in races the base model
+  calls within 10pp (interaction +0.040, t 1.4); nothing in safe seats.
+- **Thin evidence on the 2026 pattern:** 41 of the 45 training IE races are
+  defence, 4 offence, 0 mixed. Training IE was built by `collect_ies_pac.py`
+  (PAC registry + expenditure descriptions), 2026 by `collect_ies_2026.py`
+  (cand.csv DCE) — not the same measurement.
+
+At D+9.1: coef 0.074 → 65.6 seats / 9.0%; 0.026 → 66.1 / 10.6%; 0 → 66.5 / 11.7%.
+(Superseded by the refit: 0.0089.)
+
+## Corrected TEC reports were double-counted (2026-10-07)
+
+When a filer corrects a report, TEC keeps the original and the correction as
+separate cover rows, and every collector summed both. Excess dollars:
+2014 18.6%, 2018 13.1%, 2022 9.4%, 2026 7.8% (e.g. Rehmet's July report filed
+7/15 and 7/17, $380,152 each). **Fixed for 2026** (`latest_reports_only` in
+`collect_finance_2026.py`; superseded-report filter in `collect_ies_2026.py`,
+which dropped $69K incl. $59,683 of RPT spending in SD 4) — moved HD 41, 61,
+63 off the viability flag. **Training pipeline fixed the same day**:
+`latest_reports_only` / `superseded_report_ids` now live in `collect_finance.py`
+and every collector uses them; historical IE fell sharply in places (2010
+R-favouring $16.7M→$9.6M, 2014 $67.7M→$54.0M). The historical IE rebuild ran
+from the May-16 TEC ZIP because TEC was 403ing (2002–2022 expenditures do not
+change); those expend files were removed from the cache afterwards.
+
+## October finance era (2026-10-07)
+
+`VIABILITY_THRESHOLD_OCT30` = $100K House / $220K Senate, from
+`scripts/calibrate_viability_threshold.py` — the in-cycle threshold that best
+reproduces the full-cycle training flag. The same criterion reproduces the
+SEMIJUL values ($75–80K / $140K), and the answer is unchanged with or without
+the dedup. Senate n is small. `IE_WEIGHT` set to 1.0 per its own schedule.
 
 ---
 
@@ -160,6 +209,12 @@ it is not district polling.
 ---
 
 ## Small, self-contained, worth doing
+
+- **`backtest.py` / `backtest_config.py` still run the old design** (presidential
+  baseline, master-era coefficients). The demographic term was removed there too
+  on 2026-10-07, but its coefficients and baseline were not moved to the refit;
+  `scripts/refit_clean_cycles.py` is the current out-of-sample check. Port it
+  before trusting a `backtest.py` number again.
 
 - ~~Fix the `update_polling.py` docstring~~ — **done 2026-09-09.** It named four
   sources and called Quinnipiac topline-only while the manual CSV already held

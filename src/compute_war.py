@@ -46,6 +46,7 @@ USAGE:
 """
 
 import json
+import os
 import re
 import unicodedata
 import sys
@@ -65,10 +66,17 @@ OUTPUT = ROOT / "output"
 OUTPUT.mkdir(exist_ok=True)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from model_config import REGRESSION_COEFFICIENTS, IE_COEFFICIENT, IE_MIN_THRESHOLD
+from model_config import (REGRESSION_COEFFICIENTS, REGRESSION_COEFFICIENTS_NO_FINANCE,
+                          IE_COEFFICIENT, IE_MIN_THRESHOLD, BASELINE_SOURCE)
 
 COEFS = REGRESSION_COEFFICIENTS
 COEFS["ie_coefficient"] = IE_COEFFICIENT
+# The WAR baseline must not carry the full model's intercept (see
+# predict_dem_share). IE is exogenous targeting, so it stays in both.
+NO_FINANCE_COEFS = dict(REGRESSION_COEFFICIENTS_NO_FINANCE)
+NO_FINANCE_COEFS["ie_coefficient"] = IE_COEFFICIENT
+# Same switch model.py reads; TXLEG_BASELINE overrides for one run.
+WAR_BASELINE = os.environ.get("TXLEG_BASELINE", str(BASELINE_SOURCE)).lower()
 
 # Time-decay weights per cycle (geometric: 0.6 per cycle back from most recent)
 # 2024 = current (1.00), 2022 = 1 cycle back (0.60), 2020 = 2 back (0.36),
@@ -314,6 +322,8 @@ def load_pres_baseline(chamber: str, election_year: int) -> pd.DataFrame:
     it with:
         python src/collect_historical_presidential.py --pres-year 2020 --map-year 2018
     """
+    if WAR_BASELINE == "open":
+        return load_open_baseline(chamber, election_year)
     if election_year == 2024:
         path = RAW / f"tx_presidential_{chamber}_2024.csv"
     elif election_year == 2022:
@@ -340,6 +350,59 @@ def load_pres_baseline(chamber: str, election_year: int) -> pd.DataFrame:
     df = pd.read_csv(path)[["district", "dem_pres_2p_baseline"]].copy()
     df["district"] = df["district"].astype(int)
     return df
+
+
+def load_open_baseline(chamber: str, election_year: int) -> pd.DataFrame:
+    """
+    Open-race baseline (mean D two-party share of statewide downballot races
+    with no incumbent on either side), on the lines each race was run under,
+    paired the same way as the presidential baseline above. Returned under the
+    dem_pres_2p_baseline column name so the rest of the pipeline is unchanged.
+
+      2024 election -> 2024 open races, PlanH2316/S2168
+      2022 election -> 2020 open races, PlanH2316/S2168
+      2020 election -> 2020 open races, PlanH2100/S172
+      2018 election -> 2016 open races, PlanH2100/S172
+    Build any missing file with src/collect_downballot_spatial.py.
+    """
+    year, plan = {
+        2024: (2024, "planh2316" if chamber == "house" else "plans2168"),
+        2022: (2020, "planh2316" if chamber == "house" else "plans2168"),
+        2020: (2020, "planh2100" if chamber == "house" else "plans172"),
+        2018: (2016, "planh2100" if chamber == "house" else "plans172"),
+    }[election_year]
+    path = HIST / f"tx_downballot_{chamber}_{year}_{plan}.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"no open-race baseline for {election_year} {chamber}: {path}")
+    df = pd.read_csv(path)[["district", "open_mean_d2p"]].rename(
+        columns={"open_mean_d2p": "dem_pres_2p_baseline"})
+    df["district"] = df["district"].astype(int)
+    return df
+
+
+def load_white_col_centered(chamber: str, election_year: int) -> pd.DataFrame:
+    """White BA+ share of CVAP minus the Texas share (0.201, 2024 ACS), on the
+    lines the race ran under: 2018/2020 -> 2018-line CVAP x 2021 ACS,
+    2022/2024 -> current CVAP x 2024 ACS. Same construction as
+    scripts/group_error_estimate.py --education, which the term was fit on."""
+    old_lines = election_year <= 2020
+    cvap = pd.read_csv(HIST / f"tx_cvap_{chamber}_2018.csv" if old_lines
+                       else RAW / f"tx_cvap_{chamber}.csv")
+    cvap = cvap[cvap["chamber"].str.lower() == chamber]
+    edu = pd.read_csv(RAW / f"tx_education_{chamber}_acs{2021 if old_lines else 2024}.csv")
+    tot = (cvap.cvap_white_nh + cvap.cvap_black_nh + cvap.cvap_hispanic
+           + cvap.cvap_asian_nh + cvap.cvap_aian_nh + cvap.cvap_other)
+    out = pd.DataFrame({"district": cvap["district"].astype(int),
+                        "white_share": (cvap.cvap_white_nh / tot).values})
+    out = out.merge(edu[["district", "white_college_rate"]], on="district", how="left")
+    h = pd.read_csv(RAW / "tx_cvap_house.csv")
+    h = h[h["chamber"].str.lower() == "house"]
+    e24 = pd.read_csv(RAW / "tx_education_house_acs2024.csv")
+    w_col = (h.cvap_white_nh.sum() / (h.cvap_white_nh + h.cvap_black_nh + h.cvap_hispanic
+             + h.cvap_asian_nh + h.cvap_aian_nh + h.cvap_other).sum()
+             * e24.white_nh_ba_plus.sum() / e24.white_nh_25p.sum())
+    out["white_col_c"] = out.white_share * out.white_college_rate - w_col
+    return out[["district", "white_col_c"]]
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +478,11 @@ def build_race_dataset() -> pd.DataFrame:
             # Presidential baseline
             results = results.merge(pres, on="district", how="left")
 
+            # Centered white-college share, only used by the staged education
+            # term (model_config TXLEG_EDU=1); zero contribution otherwise.
+            if NO_FINANCE_COEFS.get("white_col_centered"):
+                results = results.merge(load_white_col_centered(ch, year), on="district", how="left")
+
             # Full-cycle IE data (used in baseline; exogenous targeting decision, not candidate quality)
             ie = load_ie_data(year, ch)
             if ie is not None:
@@ -454,19 +522,27 @@ def predict_dem_share(df: pd.DataFrame) -> pd.Series:
     IEs are included as they represent exogenous targeting decisions by outside groups,
     not candidate-driven effects.
     """
-    predicted = pd.Series(COEFS["intercept"], index=df.index, dtype=float)
+    # Uses REGRESSION_COEFFICIENTS_NO_FINANCE, a genuine no-finance fit. This
+    # function used to take the FULL model's coefficients and omit the finance
+    # terms while keeping its intercept, which biased the baseline: mean
+    # residual +2.34pp, turned by party_sign into a pro-D thumb on 110 of 166
+    # districts (branch refit-clean-cycles, adopted 2026-10-07).
+    NF = NO_FINANCE_COEFS
+    predicted = pd.Series(NF["intercept"], index=df.index, dtype=float)
 
-    predicted += COEFS["dem_pres_2p_baseline"] * df["dem_pres_2p_baseline"].fillna(df["dem_pres_2p_baseline"].mean())
-    predicted += COEFS["dem_incumbent"]         * df["dem_incumbent"].fillna(False).astype(float)
-    predicted += COEFS["rep_incumbent"]         * df["rep_incumbent"].fillna(False).astype(float)
-    predicted += COEFS["chamber_senate"]        * df["chamber_senate"].fillna(0)
-    predicted += COEFS["national_env"]          * df["national_env"]
+    predicted += NF["dem_pres_2p_baseline"] * df["dem_pres_2p_baseline"].fillna(df["dem_pres_2p_baseline"].mean())
+    predicted += NF["dem_incumbent"]         * df["dem_incumbent"].fillna(False).astype(float)
+    predicted += NF["rep_incumbent"]         * df["rep_incumbent"].fillna(False).astype(float)
+    predicted += NF["chamber_senate"]        * df["chamber_senate"].fillna(0)
+    predicted += NF["national_env"]          * df["national_env"]
+    if NF.get("white_col_centered"):
+        predicted += NF["white_col_centered"] * df["white_col_c"].fillna(0)
 
     # IE adjustment — full-cycle weight (1.0) for historical data
     ie_total     = df["ie_total"].fillna(0)
     ie_dem_share = df["ie_dem_share"].fillna(0.5)
     ie_active    = ie_total >= IE_MIN_THRESHOLD
-    predicted   += COEFS["ie_coefficient"] * 1.0 * (ie_dem_share - 0.5) * ie_active.astype(float)
+    predicted   += NF["ie_coefficient"] * 1.0 * (ie_dem_share - 0.5) * ie_active.astype(float)
 
     return predicted
 
@@ -475,7 +551,7 @@ def predict_dem_share(df: pd.DataFrame) -> pd.Series:
 # Compute per-race WAR
 # ---------------------------------------------------------------------------
 
-SIGMA_FULL_MODEL = COEFS["sigma"]   # full model residual SE = 0.0785
+SIGMA_FULL_MODEL = COEFS["sigma"]
 # Will be replaced with actual no-finance residual SE after computing WAR
 SIGMA_WAR_BASELINE = None
 
@@ -495,6 +571,20 @@ def compute_race_war(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["predicted_dem_share"] = predict_dem_share(df)
     df["raw_war"]             = df["dem_2p_share"] - df["predicted_dem_share"]
+
+    # Cycle fixed effect. The baseline is fit on midterms, so in presidential
+    # years it misses the whole cycle's level (2026-10-07 open-baseline refit:
+    # 2020 -2.3pp, 2024 +2.4pp, midterms ~0). Left in, that level miss becomes a
+    # partisan thumb through party_sign: every 2024 Democrat looked 2.4pp better
+    # than replacement and every Republican 2.4pp worse, at full cycle weight.
+    # WAR is quality relative to the same cycle, so absorb the cycle mean into
+    # the prediction.
+    cycle_level = df.groupby("year")["raw_war"].transform("mean")
+    print("  WAR cycle levels removed (pp): "
+          + ", ".join(f"{y} {v * 100:+.2f}" for y, v in
+                      df.groupby("year")["raw_war"].mean().items()))
+    df["predicted_dem_share"] += cycle_level
+    df["raw_war"]             -= cycle_level
 
     # Compute actual residual SE from the no-finance baseline
     # This is larger than SIGMA_FULL_MODEL because the WAR baseline
