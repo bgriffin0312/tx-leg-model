@@ -6,6 +6,10 @@ redirect to the newest published version; see scripts/check_live_embeds.py).
 The token needs chart:read, chart:write, theme:read and visualization:read --
 without the last two, publish fails with 403 "Insufficient scope".
 
+The three charts pull their data from the GitHub Pages CSVs (upload-method
+"external-data"), so the data PUT is overridden at publish; the script waits
+until Pages serves the new CSV before publishing (wait_for_external_data).
+
 Reads from .env:
   DATAWRAPPER_TOKEN   — API token (Datawrapper → Settings → API Tokens)
   DW_CHART_HOUSE      — chart ID for competitive House table
@@ -27,6 +31,7 @@ Run after a model rebuild:
 
 import os
 import re
+import time
 import sys
 from datetime import date
 from pathlib import Path
@@ -84,6 +89,39 @@ def stamp_updated_date(chart_id: str, csv_path: Path, label: str, headers: dict)
         print(f"  [{label}] date update failed: {r.status_code}  {r.text[:200]}")
 
 
+def wait_for_external_data(chart_id: str, csv_text: str, label: str, headers: dict,
+                           timeout_s: int = 720) -> bool:
+    """These charts are set to upload-method "external-data": on publish,
+    Datawrapper re-fetches the GitHub Pages copy of the CSV and ignores the
+    data PUT above. Pages takes a minute to deploy and its CDN caches files
+    for 10 minutes, so publishing right after publish_charts.ps1 pushed served
+    the previous run (found 2026-10-07: House v6 went out with stale data).
+    Wait until the external URL serves the local CSV; give up after timeout_s.
+    """
+    meta = requests.get(f"{API}/charts/{chart_id}", headers=headers, timeout=30).json()
+    data_meta = (meta.get("metadata") or {}).get("data") or {}
+    url = data_meta.get("external-data") if data_meta.get("upload-method") == "external-data" else None
+    if not url:
+        return True
+    want = csv_text.replace("\r\n", "\n").strip()
+    deadline = time.time() + timeout_s
+    waited = False
+    while True:
+        got = requests.get(url, params={"nocache": time.time()}, timeout=30)
+        if got.ok and got.content.decode("utf-8", "replace").replace("\r\n", "\n").strip() == want:
+            if waited:
+                print(f"  [{label}] external data source caught up")
+            return True
+        if time.time() > deadline:
+            print(f"  [{label}] NOT published: {url} still serves older data after "
+                  f"{timeout_s // 60} min (GitHub Pages not deployed/cached?). Re-run later.")
+            return False
+        if not waited:
+            print(f"  [{label}] waiting for {url} to serve the new CSV (Pages deploy/cache)...")
+            waited = True
+        time.sleep(20)
+
+
 def sync(chart_id: str, csv_path: Path, label: str, token: str) -> None:
     csv_text = csv_path.read_text(encoding="utf-8")
     headers  = {"Authorization": f"Bearer {token}"}
@@ -99,6 +137,8 @@ def sync(chart_id: str, csv_path: Path, label: str, token: str) -> None:
         return
 
     stamp_updated_date(chart_id, csv_path, label, headers)
+    if not wait_for_external_data(chart_id, csv_text, label, headers):
+        return
 
     pub = requests.post(
         f"{API}/charts/{chart_id}/publish",
