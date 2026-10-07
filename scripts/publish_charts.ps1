@@ -29,6 +29,9 @@ python scripts/build_index.py
 
 Write-Host "[6/7] Building Flourish CSV..." -ForegroundColor Cyan
 python scripts/build_competitive_csv.py | Select-Object -Last 2
+# The WAR top-10 CSV feeds Datawrapper chart L6hhb; it was committed below but
+# never rebuilt here, so the live WAR table sat on the July run (found 2026-10-07).
+python scripts/build_war_top10_csv.py | Select-Object -Last 1
 
 Write-Host "[7/7] Committing + pushing outputs..." -ForegroundColor Cyan
 git add output/*.html output/competitive_house.csv output/competitive_senate.csv output/war_top10_2026.csv

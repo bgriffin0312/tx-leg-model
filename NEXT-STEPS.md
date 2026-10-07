@@ -66,6 +66,34 @@ Still open from the September recommendation:
 
 ---
 
+## Texas-poll calibration — historical piece (2026-10-07)
+
+Brennan asked how to use Texas polls against the generic-ballot dial. Built
+`scripts/texas_poll_error_history.py` on 333 Texas statewide general-election
+polls, 2014–2024 (Wikipedia, revision-pinned; `data/raw/historical/
+tx_statewide_polls_2014_2024.csv` + results) and 538/RCP national generic
+averages as of Oct 1 (Wayback-archived; 538's 2014 series is a 2020 back-cast).
+
+- Texas polls as of Oct 1 ran **+2.8 points too Democratic** on average,
+  too D in 5 of 6 cycles (2014 +6.4, 2016 +1.5, 2018 −3.2, 2020 +3.1,
+  2022 +2.7, 2024 +5.8); cycle sd ~3.5. In 2014 the Oct-1 average was 7 too D
+  and the final month dead on — Texas polls have drifted R late.
+- **They carry no independent information against the model.** In all three
+  midterms the Texas polls missed in the same direction as the national polls
+  that drive the dial, only larger: model real-time miss +4.7/−2.1/+1.2 vs
+  Texas polls +6.4/−3.2/+2.7, correlation +0.99. Blending would have made every
+  midterm worse (weight 0.25: rms 3.0→3.4; 0.5: →3.7); the error-minimizing
+  weight is negative. Same with partisan-sponsored polls excluded.
+- Caveats: three midterms; most historical Texas polls are candidate races
+  (governor/Senate), not a generic ballot — there were essentially no Texas
+  generic polls before 2020.
+- **Implication: do not shift the forecast level toward Texas polls.** The
+  2026 gap (Texas generic polls ~R+1, R+4 after the historical bias, vs the
+  model's R+8.3) is large, but history says Texas polls amplify the national
+  polling error rather than correct it. Open option (Brennan's call): widen
+  σ_national when Texas polls and the model disagree by more than history,
+  without moving the mean. Re-test once 2026 results exist.
+
 ## Polling refresh (2026-10-07)
 
 11 national releases fielded Sep 7–Oct 7 carried a W/B/H generic banner
