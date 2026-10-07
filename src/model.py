@@ -71,11 +71,12 @@ from model_config import (
     IE_MIN_THRESHOLD,
     IE_WEIGHT,
     IE_DATA_THROUGH,
-    WAR_PERSISTENCE_COEF,
+    WAR_PERSISTENCE_K,
     BASELINE_SOURCE,
     GROUP_ERROR_ENABLED,
     GROUP_ERROR_SIGMA,
     GROUP_ERROR_EDUCATION,
+    FIREBRAND_STANDIN_PP,
 )
 
 _HAS_FUNDRAISING_SHARE = "dem_fundraising_share" in COEFS
@@ -235,13 +236,25 @@ def _fuzzy_war_match(query_norm: str, party: str,
     return None
 
 
+def _firebrand_flags() -> set[tuple[str, int]]:
+    """(chamber, district) seats whose Republican nominee is a flagged
+    non-incumbent firebrand, from config/firebrand_nonincumbents_2026.csv
+    (flag == 1). Missing file -> no flags."""
+    path = ROOT / "config" / "firebrand_nonincumbents_2026.csv"
+    if not path.exists():
+        return set()
+    f = pd.read_csv(path)
+    f = f[f["flag"] == 1]
+    return {(str(c).lower(), int(d)) for c, d in zip(f["chamber"], f["district"])}
+
+
 def _get_war_lookup() -> dict[tuple[str, str], float]:
     """
     Return {(candidate_norm, party): avg_war} from candidate_war.csv.
     avg_war is the simple per-race average WAR in percentage-point units;
     we return it as-is and convert at call site (divide by 100).
-    Uses avg_war (not career_war) because the persistence coefficient β=0.46
-    was estimated from per-race WAR regressions, not cumulative career sums.
+    Uses avg_war (not career_war): persistence was estimated on per-race WAR,
+    not cumulative career sums. Values are returned persistence-weighted.
     Loaded once; returns {} if the file doesn't exist.
     Also builds _war_names_by_party for fuzzy matching.
     """
@@ -264,10 +277,17 @@ def _get_war_lookup() -> dict[tuple[str, str], float]:
         party = str(row.get("party", "")).strip().upper()
         avg_war = row.get("avg_war")
         if norm_name and party in ("D", "R") and pd.notna(avg_war):
-            lookup[(norm_name, party)] = float(avg_war)
+            # Reliability-weighted persistence (2026-10-07): an average of n
+            # races carries n / (n + k) of itself forward, k from
+            # scripts/war_persistence_estimate.py. Stored pre-weighted, so the
+            # call site adds it directly.
+            n = row.get("n_races")
+            n = int(n) if pd.notna(n) and n > 0 else 1
+            carried = n / (n + WAR_PERSISTENCE_K) * float(avg_war)
+            lookup[(norm_name, party)] = carried
             latest_district = row.get("latest_district")
             names_by_party.setdefault(party, []).append(
-                (norm_name, set(norm_name.split()), float(avg_war),
+                (norm_name, set(norm_name.split()), carried,
                  str(row.get("latest_chamber", "")),
                  int(latest_district) if pd.notna(latest_district) else None)
             )
@@ -551,7 +571,8 @@ def build_linear_predictions(df: pd.DataFrame,
     #   • skip challenger_viability_flag and dem_fundraising_share (WAR already
     #     captures fundraising ability as a quality signal, so including both
     #     would double-count it)
-    #   • add WAR_PERSISTENCE_COEF × avg_war as a quality adjustment
+    #   • add n/(n+WAR_PERSISTENCE_K) × avg_war as a quality adjustment
+    #     (n = races in the record; weighted in _get_war_lookup)
     #
     # avg_war sign convention (from compute_war.py):
     #   positive WAR → candidate overperforms fundamentals for THEIR party
@@ -589,7 +610,7 @@ def build_linear_predictions(df: pd.DataFrame,
                     match_type = "fuzzy"
             if avg_war is not None:
                 party_sign = 1 if inc_party == "D" else -1
-                war_adjustments[idx] = party_sign * WAR_PERSISTENCE_COEF * avg_war / 100.0
+                war_adjustments[idx] = party_sign * avg_war / 100.0  # already persistence-weighted
                 has_war[idx] = True
                 if match_type == "exact":
                     n_exact += 1
@@ -598,6 +619,17 @@ def build_linear_predictions(df: pd.DataFrame,
 
     # Apply: WAR districts get war_adjustment; others get finance_term
     predicted += np.where(has_war, war_adjustments, finance_term)
+
+    # Firebrand stand-in for flagged Republican NON-incumbent nominees (they
+    # have no WAR to carry a visible-firebrand penalty). See model_config.
+    flags = _firebrand_flags()
+    if flags:
+        hit = np.array([(str(c).lower(), int(d)) in flags
+                        for c, d in zip(df["chamber_lower"], df["district"])])
+        predicted = predicted + FIREBRAND_STANDIN_PP * hit
+        if hit.any():
+            print(f"  Firebrand stand-in: +{FIREBRAND_STANDIN_PP * 100:.1f}pp D in "
+                  f"{int(hit.sum())} seat(s) with a flagged R non-incumbent")
 
     # IE signal: apply ie_dem_share adjustment where total IEs exceed threshold.
     # ie_dem_share = D-favoring IEs / total IEs (0.5 = neutral).
@@ -1021,7 +1053,7 @@ def main():
                                   district=row.get("district")) is not None:
                 n_fuzzy_pre += 1
         n_total = n_exact_pre + n_fuzzy_pre
-        print(f"  WAR persistence:        β={WAR_PERSISTENCE_COEF}  "
+        print(f"  WAR persistence:        n/(n+{WAR_PERSISTENCE_K}) by races on record  "
               f"({n_total}/{len(df)} incumbents matched: "
               f"{n_exact_pre} exact, {n_fuzzy_pre} fuzzy)")
     print()

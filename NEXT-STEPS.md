@@ -11,8 +11,9 @@ Routine: `publish_charts.ps1` → `sync_datawrapper.py` → `check_live_embeds.p
 *2026-10-07: polls (11-pollster national race aggregate, D+9.2), October 30-day
 TEC reports and IEs are in, and the September refit decision was taken (open-race
 baseline, clean-cycle refit, demographic term deleted, training data deduplicated).
-With the group-error layer and the education term + error split: **66.1 House
-seats / 13.1% majority, Senate 11.1 / 0.2%** at D+9.2. See the 2026-10-07 sections below.*
+With the group-error layer, education, re-estimated WAR persistence and the
+firebrand stand-in: **66.2 House seats / 13.3% majority, Senate 11.1 / 0.2%** at
+D+9.2 (local run; republish with publish_charts.ps1 + sync_datawrapper.py). See the 2026-10-07 sections below.*
 
 ---
 
@@ -86,9 +87,19 @@ elections after it.
   R tag is −0.2 (t −0.5); adding a penalty on top of the model's WAR term makes
   out-of-sample prediction worse. The penalty is real but already carried by
   WAR persistence. No model change.
-- **New open item:** in these regressions prior WAR predicts the next race at
-  ~0.25 (se 0.15), vs `WAR_PERSISTENCE_COEF` 0.46 — estimated on the pre-refit
-  WAR definition. Re-estimate persistence on the rebuilt WAR.
+- **WAR persistence re-estimated (done, 2026-10-07):** on the rebuilt WAR,
+  carry-forward rises with races on record (1 race 0.16, 2 races 0.62);
+  adopted beta(n) = n/(n+2.93) — 0.25/0.41/0.51/0.58 for 1–4 races
+  (`scripts/war_persistence_estimate.py`, `model_config.WAR_PERSISTENCE_K`),
+  replacing the flat 0.46. Beats a single beta in every held-out year.
+- **Non-incumbent stand-in (Brennan, 2026-10-07):** flagged Republican
+  non-incumbents get +0.5pp toward the Democrat (half the raw incumbent effect;
+  `FIREBRAND_STANDIN_PP`). 22 R non-incumbents in live seats screened
+  (`config/firebrand_nonincumbents_2026.csv`, sourced): flagged Wambsganss (SD 9:
+  Patriot Mobile school-board takeovers, $600K+ Dunn/Wilks network) and Bean
+  (HD 94: $250K TUCM); Bowen (HD 129) cleared the $40K line but set to 0 as an
+  establishment consensus pick. No D flag (no D penalty found). Effect: HD 94
+  19→22%, SD 9 3.6→4.7%. House 66.2 seats / 13.3%.
 
 ## Texas-poll calibration — historical piece (2026-10-07)
 

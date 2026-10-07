@@ -394,20 +394,37 @@ ENV_SCENARIOS: list[int] = [-3, 0, 3, 5, 8]
 # ---------------------------------------------------------------------------
 # WAR (Wins Above Replacement) persistence
 # ---------------------------------------------------------------------------
-# Empirically estimated from 91 candidate-pairs across 2018→2022 and 2022→2024.
-#   Combined β = 0.432  (r=0.508, p<0.0001)
-#   Competitive only β = 0.459  (r=0.531, p<0.0001)
-#   2022→2024 only  β = 0.549  (more weight on recent cycle)
-# Using 0.46 as the working estimate (rounds competitive β, skews toward recent).
+# Re-estimated 2026-10-07 on the rebuilt WAR (scripts/war_persistence_estimate.py,
+# 238 race pairs 2018-2024). How much past WAR carries forward depends on how
+# many races it averages: 1 race 0.16, 2 races 0.62, 3+ races ~1.0+ (n=18).
+# Reliability form beta(n) = n / (n + k), k = 2.93 pooled:
+#   beta(1) 0.25, beta(2) 0.41, beta(3) 0.51, beta(4) 0.58.
+# Leave-one-year-out it beats a single beta in all three years and the old
+# flat 0.46 (estimated on the pre-refit WAR) in 2020 and 2022, losing 2024
+# narrowly (2.48 vs 2.45pp RMSE).
 #
 # Applied only to incumbents found in data/processed/candidate_war.csv.
 # For those districts, challenger_viability_flag and dem_fundraising_share
 # are dropped from the baseline (WAR already incorporates fundraising ability).
-WAR_PERSISTENCE_COEF: float = 0.46
+WAR_PERSISTENCE_K: float = 2.93
 
 # (TX_HISPANIC_ADJUSTMENT, the -0.05 x Hispanic-CVAP constant, was deleted
 # 2026-10-07 together with the demographic level term in model.py; it existed
 # to cancel a residual that term created. See model.build_linear_predictions.)
+
+# ---------------------------------------------------------------------------
+# Firebrand stand-in for non-incumbents (2026-10-07, Brennan)
+# ---------------------------------------------------------------------------
+# scripts/firebrand_penalty_test.py: Republican legislators with visible
+# firebrand markers (Freedom Caucus, Texas Monthly Worst, speaker revolts,
+# insurgent-PAC backing, viral confrontations) ran -0.9pp behind fundamentals
+# in contested general elections 2018-2024 (t -2.8). For incumbents WAR already
+# carries it. Non-incumbents have no WAR, so a flagged Republican nominee gets
+# a small stand-in: about half the raw effect, because a non-incumbent's signal
+# is weaker evidence. Applied to the D share (+ = toward the Democrat).
+# Democrats: no penalty found (+1.0pp raw, n=13), so no D flag.
+# Flags and their evidence: config/firebrand_nonincumbents_2026.csv.
+FIREBRAND_STANDIN_PP: float = 0.005
 
 # ---------------------------------------------------------------------------
 # Correlated group-error layer (Monte Carlo), built 2026-10-07
