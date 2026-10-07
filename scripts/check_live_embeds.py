@@ -29,6 +29,7 @@ import io
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -48,7 +49,9 @@ def live_version(chart_id: str, start_url: str) -> tuple[str, int]:
     """Follow meta-refresh redirects to the version actually being served."""
     url = start_url
     for _ in range(10):
-        page = requests.get(url, timeout=30).text
+        # Cache-bust: the CDN can hold an old version page's redirect for hours
+        # (seen 2026-10-07: v1 still pointed at v2 two hours after v4 published).
+        page = requests.get(url, params={"nocache": time.time()}, timeout=30).text
         m = re.search(r'http-equiv="REFRESH"\s+content="0;\s*url=([^"]+)"', page, re.I)
         if not m:
             break
@@ -76,7 +79,10 @@ def main():
             a = json.loads(html.unescape(attrs))
             cid = re.search(r"dwcdn\.net/([A-Za-z0-9]+)/", a["url"]).group(1)
             url, ver = live_version(cid, a["url"])
-            live = pd.read_csv(io.StringIO(requests.get(url + "dataset.csv", timeout=30).text))
+            # Datawrapper serves the CSV as octet-stream with no charset, so
+            # decode explicitly; a guessed encoding garbles the ★ markers.
+            raw = requests.get(url + "dataset.csv", params={"nocache": time.time()}, timeout=30).content
+            live = pd.read_csv(io.StringIO(raw.decode("utf-8")))
             note = re.search(r"Updated [0-9/]+", requests.get(url, timeout=30).text)
             print(f"\n  {a.get('title')} [{cid}]  embed {a['url']}  ->  serving v{ver}")
             print(f"    chart's own date note: {note.group(0) if note else '(none)'};  "

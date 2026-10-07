@@ -1,5 +1,10 @@
 """
-Push the latest Flourish-ready CSVs to Datawrapper and republish each chart.
+Push the latest CSVs to Datawrapper, stamp each chart's "Updated <date>" line,
+and republish. Republishing updates the Substack post automatically (its embeds
+redirect to the newest published version; see scripts/check_live_embeds.py).
+
+The token needs chart:read, chart:write, theme:read and visualization:read --
+without the last two, publish fails with 403 "Insufficient scope".
 
 Reads from .env:
   DATAWRAPPER_TOKEN   — API token (Datawrapper → Settings → API Tokens)
@@ -21,11 +26,17 @@ Run after a model rebuild:
 """
 
 import os
+import re
 import sys
+from datetime import date
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+# The Windows console default (cp1252) can't print the arrow in the status
+# line; that crash used to abort the remaining charts after the first publish.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -38,6 +49,39 @@ CHARTS = [
     ("DW_CHART_SENATE", OUTPUT / "competitive_senate.csv", "Competitive Senate"),
     ("DW_CHART_WAR",    OUTPUT / "war_top10_2026.csv",     "WAR Top 10"),
 ]
+
+
+UPDATED = re.compile(r"Updated \d{1,2}/\d{1,2}/\d{2,4}")
+
+
+def stamp_updated_date(chart_id: str, csv_path: Path, label: str, headers: dict) -> None:
+    """Rewrite the chart's "Updated M/D/YYYY" line to the date the CSV was built.
+
+    The line lives in different fields on different charts (describe.intro on
+    the House table, annotate.notes on the other two), so find it wherever it
+    is and replace only the date. If no chart field has one, add it to the
+    notes. Uses the CSV's modification date, not today's, so re-running the
+    sync later without a rebuild doesn't claim fresher data than it has.
+    """
+    built = date.fromtimestamp(csv_path.stat().st_mtime)
+    new_text = f"Updated {built.month}/{built.day}/{built.year}"
+    got = requests.get(f"{API}/charts/{chart_id}", headers=headers, timeout=30)
+    if got.status_code >= 300:
+        print(f"  [{label}] could not read chart metadata ({got.status_code}); date not updated")
+        return
+    meta = got.json().get("metadata", {})
+    patch = {}
+    for section, field in (("describe", "intro"), ("annotate", "notes")):
+        text = (meta.get(section) or {}).get(field) or ""
+        if UPDATED.search(text):
+            patch[section] = {field: UPDATED.sub(new_text, text)}
+    if not patch:
+        notes = (meta.get("annotate") or {}).get("notes") or ""
+        patch["annotate"] = {"notes": (notes + " " if notes else "") + new_text}
+    r = requests.patch(f"{API}/charts/{chart_id}", headers=headers,
+                       json={"metadata": patch}, timeout=30)
+    if r.status_code >= 300:
+        print(f"  [{label}] date update failed: {r.status_code}  {r.text[:200]}")
 
 
 def sync(chart_id: str, csv_path: Path, label: str, token: str) -> None:
@@ -53,6 +97,8 @@ def sync(chart_id: str, csv_path: Path, label: str, token: str) -> None:
     if put.status_code >= 300:
         print(f"  [{label}] data upload failed: {put.status_code}  {put.text[:200]}")
         return
+
+    stamp_updated_date(chart_id, csv_path, label, headers)
 
     pub = requests.post(
         f"{API}/charts/{chart_id}/publish",
