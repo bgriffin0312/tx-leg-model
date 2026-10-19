@@ -67,6 +67,38 @@ Still open from the September recommendation:
 
 ---
 
+## Texas Bullpen worry list vs. the model (2026-10-19)
+
+The Texas Bullpen published House GOP leadership's worry tiers (Tier 1: HD 26,
+28, 34, 37, 52, 61, 63, 80, 94, 96, 97, 108, 112, 121, 122, 127, 129, 132, 133,
+138, 150; Tier 2: 14, 20, 29, 54, 67, 126; Tier 3: 55, 89).
+`scripts/bullpen_tier_compare.py`, run at D+9.2 (66.0 seats / 12.3%).
+
+- **Broad agreement on membership.** All 29 listed seats are in the model's top
+  40 R-held seats by flip probability; 15 of the model's top 16 are listed.
+  Tier 1: median R+8.9, 4.4 expected flips, 6 of 21 within 5 points.
+- **HD 118 is not listed at all** — the model's #2 flip (52%, open, D outraising
+  R $756K to $660K).
+- **Houston runs much deeper on their list than in the model.** Eight Tier 1
+  seats are Harris/Fort Bend (26, 28, 127, 129, 132, 133, 138, 150), averaging
+  R+13 in the model, vs. R+6 for their DFW Tier 1 seats. HD 129 (Bowen) is the
+  widest gap: R+19 / 1% now; 46% in the May post-runoff table and 35%→9% with
+  the old IE term. The model has no regional error term (group error is by race
+  and education), so a Houston-specific move would not be represented. Watch
+  the 8-day reports (Oct 26) for Houston money.
+- Tier 2 includes two seats the model calls safe: HD 126 (R+21), HD 29 (R+17.5).
+  Unlisted but about as live as their Tier 2/3 seats: HD 66, 106, 65, 57 (~R+11, 7–12%).
+- **"Tier 1 within 5 points."** Conditioning the simulations on the median Tier 1
+  margin: R+5 to even → 71.0 seats / 8% majority; within ±5 → 73.9 / 34%;
+  within ±2.5 → 75.6 / 47%. Dial-equivalent: Tier 1 median at R+5 ≈ D+13.5
+  (71.1 / 28%), at R+2.5 ≈ D+16 (74.5 / 40%). As a poll reading it implies
+  ~4pp bluer than the model in those seats; as a final result where Republicans
+  narrowly hold them, it barely helps (D needs ~14 net flips of 21).
+- **No model change.** A worry list is a resource/donor document, not polling,
+  and Texas polls have historically missed toward Democrats.
+
+---
+
 ## Firebrand / rabble-rouser penalty (2026-10-07)
 
 Brennan asked whether visibly extra-partisan members pay a general-election

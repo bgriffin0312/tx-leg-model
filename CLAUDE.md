@@ -20,6 +20,8 @@ Race-by-race model of Texas legislative elections (TX House + TX Senate) in 2026
 
 ## Current state (as of April 2026)
 
+> SNAPSHOT as of April 2026 — not current. The model is built and published; current state lives in `NEXT-STEPS.md`.
+
 ### Data collected — all in `data/raw/`
 
 | File | Contents | Source |
