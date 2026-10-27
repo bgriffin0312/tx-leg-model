@@ -10,10 +10,10 @@ Routine: `publish_charts.ps1` → `sync_datawrapper.py` → `check_live_embeds.p
 
 *2026-10-27: TEC 8-day reports and IEs are in (IE dollars corrected, see below),
 and polls refreshed LV-only (3 releases, D+9.2). **66.2 House seats / 13.1%
-majority, Senate 11.1 / 0.1%** — local run, NOT yet republished (publish_charts.ps1
-→ sync_datawrapper.py → check_live_embeds.py). The live charts still show the
-2026-10-07 run (66.2 / 13.3%). See "October 8-day refresh" below; the refit and
-model spec are in the 2026-10-07 sections.*
+majority, Senate 11.1 / 0.1%** — published 2026-10-27 (Pages `2304675`;
+Datawrapper House v9, Senate v8, WAR v8, verified with check_live_embeds.py).
+See "October 8-day refresh" below; the refit and model spec are in the
+2026-10-07 sections.*
 
 ---
 
