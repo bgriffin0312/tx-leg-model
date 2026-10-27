@@ -25,8 +25,8 @@ WHICH POLLS HAVE RACIAL CROSSTABS — read this before trusting any list
 HARD-WIRED EXTRACTORS IN THIS FILE (a different thing from "has crosstabs"):
   1. Economist/YouGov weekly PDFs. Detection keys on the 'genericcongressional
      vote' table label — a YouGov-specific string, not a general detector.
-     Latest wired: 2026-10-02_to_05.
-  2. Marist/NPR PDFs. Latest wired: 2026-03-02 — STALE, verify before relying.
+     None wired since 2026-10-27: race is on the RV base only and the model is LV-only now.
+  2. Marist/NPR PDFs. Latest wired: 2026-03-02. Oct 2026 release is White/Non-white only.
   3. Quinnipiac PDFs. Latest wired: 2025-12-17 — STALE.
   4. Manual CSV (data/raw/racial_crosstab_inputs.csv), which is where every
      recent row has actually come from.
@@ -181,7 +181,9 @@ YOUGOV_PDFS = [
     # Keep ONE YouGov per aggregation run — including two back-to-back weeklies
     # double-counts the pollster's house effect. Use the most recent in-window
     # fielding and drop older ones once a fresher poll is available.
-    ("2026-10-02_to_05", "https://d3nkl3psvxxpe9.cloudfront.net/documents/econTabReport_703uvs1.pdf"),
+    # LV only from 2026-10-27 (Brennan). Economist tab reports break race out on the
+    # RV base only, so none is wired; CBS/YouGov LV rows go in the manual CSV instead.
+    # Last RV report checked: 2026-10-19_to_20 econTabReport_AjDiUmp.pdf.
 ]
 
 
@@ -335,6 +337,8 @@ def _parse_yougov_pdf(pdf_bytes: bytes) -> dict | None:
 # Known recent Marist/NPR PDF URLs (most recent first).
 # Landing page: maristpoll.marist.edu/npr-pbs-newshour-marist-poll/
 MARIST_PDFS = [
+    # Oct 19-20 2026 release (..._202610211808AS.pdf) checked 2026-10-27: USCNGS01 breaks race
+    # out only as White / Non-white, so it cannot feed W/B/H. Not wired.
     ("2026-03-02_to_04", "https://maristpoll.marist.edu/wp-content/uploads/2026/03/NPR_PBS-News_Marist-Poll_USA-NOS-and-Tables_202603091024.pdf"),
 ]
 
@@ -659,6 +663,24 @@ def aggregate_polls(polls: list[PollResult], window_days: int = WINDOW_DAYS,
     # Filter to window
     in_window = [p for p in polls if p.poll_date >= cutoff]
     out_of_window = [p for p in polls if p.poll_date < cutoff]
+
+    # One release per pollster: two weeklies from the same firm double-count
+    # its house effect (the rule YOUGOV_PDFS already followed by hand; Morning
+    # Consult's Sep 27 and Oct 25 weeklies were both in window on 2026-10-27).
+    # CBS/YouGov and Economist/YouGov are one firm.
+    def _firm(p):
+        name = p.pollster.lower()
+        return "yougov" if "yougov" in name else name
+    latest = {}
+    for p in in_window:
+        k = _firm(p)
+        if k not in latest or p.poll_date > latest[k].poll_date:
+            latest[k] = p
+    superseded = [p for p in in_window if latest[_firm(p)] is not p]
+    if verbose and superseded:
+        print(f"\n  Superseded by a newer release from the same pollster: "
+              + ", ".join(f"{p.pollster} ({p.poll_date})" for p in superseded))
+    in_window = [p for p in in_window if latest[_firm(p)] is p]
 
     if verbose and out_of_window:
         print(f"\n  Excluded {len(out_of_window)} polls outside {window_days}-day window:")

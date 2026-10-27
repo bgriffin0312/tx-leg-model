@@ -84,6 +84,14 @@ def load_2026_cover(verbose: bool = False) -> dict:
     """
     print("Reading TEC ZIP central directory...")
     cd = _tec_zip_central_dir(TEC_ZIP_URL)
+    # TEC's CloudFront 403s for a while after a large pull, and the directory
+    # read fails before the cache is consulted. Without --force-download the
+    # cached cover.csv is what would be read anyway, so use it.
+    import collect_finance
+    cached_cover = collect_finance.FINANCE_CACHE / "tec_cover.csv"
+    if not cd and not collect_finance.FORCE_TEC_DOWNLOAD and cached_cover.exists():
+        print("  TEC unreachable; falling back to the cached cover.csv")
+        cd = {"cover.csv": {}}
     if not cd:
         raise RuntimeError("Could not read TEC ZIP central directory.")
 

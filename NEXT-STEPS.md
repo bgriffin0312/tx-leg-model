@@ -8,12 +8,104 @@ embeds (House v5, Senate v4, WAR v4, verified with `scripts/check_live_embeds.py
 Publishing needed token scopes chart:read/write + theme:read + visualization:read.
 Routine: `publish_charts.ps1` → `sync_datawrapper.py` → `check_live_embeds.py`.*
 
-*2026-10-07: polls (11-pollster national race aggregate, D+9.2), October 30-day
-TEC reports and IEs are in, and the September refit decision was taken (open-race
-baseline, clean-cycle refit, demographic term deleted, training data deduplicated).
-With the group-error layer, education, re-estimated WAR persistence and the
-firebrand stand-in: **66.2 House seats / 13.3% majority, Senate 11.1 / 0.2%** at
-D+9.2 (local run; republish with publish_charts.ps1 + sync_datawrapper.py). See the 2026-10-07 sections below.*
+*2026-10-27: TEC 8-day reports and IEs are in (IE dollars corrected, see below),
+and polls refreshed LV-only (3 releases, D+9.2). **66.2 House seats / 13.1%
+majority, Senate 11.1 / 0.1%** — local run, NOT yet republished (publish_charts.ps1
+→ sync_datawrapper.py → check_live_embeds.py). The live charts still show the
+2026-10-07 run (66.2 / 13.3%). See "October 8-day refresh" below; the refit and
+model spec are in the 2026-10-07 sections.*
+
+---
+
+## October 8-day refresh (2026-10-27)
+
+**Finance.** TEC 8-day reports (due 10/26) pulled with `--force-download`: ~286
+legislative 8-day reports received 10/22–27; every district's raised total rose,
+none fell, no party-assignment changes. Five new viability flags: HD 41 (R
+Groves), 55, 61, 63, 132. Four live-seat nominees had no 8-day report yet:
+Morgan (HD 26), DeBurr (HD 65), Wheatley (HD 67), Bean (HD 94) — re-pull once
+late filings land. `collect_finance_2026.py` now falls back to the cached
+`cover.csv` when TEC's CloudFront 403s and the run is not `--force-download`.
+
+**IE bug, fixed.** In `cand.csv` a multi-candidate expenditure is one row per
+beneficiary, each carrying the FULL `expendAmount` (all 8,169 such
+expenditures). `collect_ies_2026.py` counted each in full, so Texas Now PAC's
+single $365,330 buy counted in nine districts; 2026 legislative IE read $30.9M
+classified instead of **$9.7M ($7.6M R / $2.1M D)**. Now split evenly across
+beneficiaries. The Oct 7 run had the same inflation. Training IE is unaffected
+(built from the expenditure files, one row per expenditure). Also changed:
+direction is now by **beneficiary first** (nominee's party, flipped when the
+purpose text opposes that candidate — AFC Victory Fund files attack ads under the
+target); a named non-nominee is excluded ($87K: Legacy 44 for Haddad, AFT for
+Lawrence Allen, Tovo, …); filer party only when no candidate is named. Filer-first
+had signed Texas REALTORS' $150 gifts to ~59 D nominees as R. Typo/wrong-district
+beneficiaries mapped in `config/dce_beneficiary_overrides.csv` (Zack Dunn HD 121
+$47K from Northside AFT, Bean, Richardson, Patterson, Tepper, Perry).
+
+**Effect: zero net seats** (−0.01). Moves ≥2pp all trace to IE crossing the $50K
+threshold or the IE share moving off zero (HD 122 −4.2, 20 −3.4, 52 +3.7, 74 +4.4,
+67 +3.1) or new flags (HD 41 −3.2, 63 −2.2) — the 0.0089 coefficient doing what
+the refit intended.
+
+**Houston (the Bullpen question).** No Democratic money surge outside HD 133
+($341K raised in October) and HD 138 ($228K); R incumbents there raised $1.0–1.1M
+each in the same window, and HD 138 carries $521K of R IE. HD 129's Democrat has
+raised $55K all cycle. Nothing here argues for a Houston-specific shift.
+
+**Polls — LV only (Brennan, 2026-10-27).** NYT's list (`/interactive/polls/
+congressional-vote-2026.html`; data at `/newsgraphics/polls/house.csv`) had 50
+national releases since 9/23; the LV average of one release per pollster since
+10/13 is ~D+9.4. Race banners on an LV base: NYT/Siena 10/12–19, Morning
+Consult 10/19–25 (same 2026/09 URL, updated in place), CBS/YouGov 9/30–10/2.
+Aggregate D+9.2 (unchanged); W 47.5, B 86.7, H 65.0 (+1.8). Checked and
+excluded as RV/adult: Echelon 10/15–19 (RV), Pew 9/28–10/4 (RV), Focaldata
+10/16–20 (adults), Economist/YouGov (race on RV base only — none wired now).
+No B/H split: Marist 10/19–20 (White/Non-white). Paywalled: Strength In
+Numbers/Verasight. Not located: CBS 10/21–23 PDF. `update_polling.py` now keeps
+one release per pollster in the window. Race shares no longer move the mean
+(demographic term deleted 10/7) — only the topline and the group-error layer.
+Wedgewood, the fake-poll outfit exposed 10/21, was never in our inputs.
+
+**Race-shift term re-tested on the adopted spec (2026-10-27,
+`scripts/race_shift_test.py`).** The September test scored against pre-refit
+coefficients; this one uses the open baseline + SHIP terms, leave-one-cycle-out.
+Shift = Σ (district share − TX share) × (race D 2p now − prior presidential).
+RMSE, held-out cycle (adopted → variant):
+- National crosstab delta, imposed: 2018 3.59→3.65, 2022 2.80→2.88 (worse both).
+  Half weight: pooled 3.24→3.17. Oracle (Catalist's actual 2022 race vote): 2.89,
+  worse — national race swings don't transfer to Texas.
+- UT same-pollster delta, imposed: **2018 3.59→3.17**, fixing the Hispanic-
+  correlated miss (resid slope +9.2→−2.4pp/unit); 2022 2.80→2.87 (UT delta ≈0
+  that year, so no signal either way). Pooled 3.24→3.03. One informative cycle.
+- 2026 forward, same seed: UT Oct LV (new, `ut_tpp_oct2026_crosstabs.pdf`, Q27B
+  LV p.136: W 35/57, B 70/18, H 48/41) minus UT Oct 2024 LV = W +0.7, B −3.4,
+  H +5.1. House 66.0→66.7 seats but majority 12.0%→10.3%: Valley seats up
+  (HD 37 29→49%, 34 55→72, 118 53→65, 41 64→82, 74 68→84, 80 6→15), DFW/Houston
+  suburban targets down (HD 112 47→39, 108 37→31, 63 29→25, 61/66/67 −3 to −4).
+  The national-crosstab version is the same shape, larger (66.5 / 8.9%).
+- Published practice (research 2026-10-27): FiftyPlusOne matches our structure
+  (uniform shift + zero-centered demographic error); Silver's error layer is the
+  same, and he moves means only indirectly (CANTOR: topline polls in similar
+  places); Split Ticket 2026 shifts by demographic group using its own large
+  polls through an MRP-style electorate. Nobody feeds public race crosstabs into
+  means. **Undecided (Brennan's call):** keep, ship the UT shift (full/half
+  weight), or publish it as a sensitivity.
+
+**2018 seat backtest and the "pros expect a bigger swing" question (2026-10-27).**
+`scripts/backtest_2018_seats.py`: adopted spec incl. education, fit on 2014+2022
+only → 2018 House **64.4 D seats vs 67 actual** (10–90: 56–74) at the real D+8.6;
+63.4 at the Sept-1 D+7.5. Under by ~3, all on the R side: the 12 R-incumbent
+seats Democrats took were predicted 3–5pp too Republican (model gave most of
+them 23–65%). `scripts/compare_2018_2026_terrain.py` (open-race baseline, D
+seats if every district moves D by +0/+2/+4/+6/+8/+10):
+2016 races on 2013 map 56/58/60/69/74/82; 2020 races on 2013 map
+68/74/79/85/91/96; **2020 races on 2021 map 66/66/67/69/76/92**; 2024 races on
+2021 map 60/62/63/68/71/81. Same election, new map: −8 to −16 seats at +2 to
++6 — a wall of R seats just out of reach until ~+8, then it collapses. The
+2020→2024 electorate shift costs another 1–6. In absolute seats the 2026 terrain
+≈ 2018's; the gain looks small because Democrats start at 62 (above their 2024
+baseline's 60), not 55. D+9.2 moves R-held seats +3.4pp vs baseline; D+13.5
+moves them +5.4.
 
 ---
 
@@ -181,7 +273,9 @@ the same day on the adopted refit's terms at **0.0089** (neutral out of sample).
 The findings below still describe what IE money signals.
 
 With the October 30-day reports in, every competitive R-held House seat now
-carries $65K–$520K of one-sided Republican IE money. The model reads that as
+carries $65K–$520K of one-sided Republican IE money (dollar figures inflated:
+multi-candidate expenditures were counted in full per candidate, fixed
+2026-10-27; the one-sidedness stands). The model reads that as
 −3.7pp for the Democrat in each seat (HD 129 35%→9%, HD 96 51%→30%, HD 94
 67%→52%). **The whole −0.9 House-seat drop from the October money comes from
 this term**; with it zeroed, the new finance data leaves the forecast at 66.5.

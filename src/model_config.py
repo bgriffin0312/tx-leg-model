@@ -50,27 +50,27 @@ import os
 
 RACE_GENERIC_BALLOT_D_SHARE: dict[str, float] = {
     # White non-Hispanic: historically R+15 to R+20 nationally; Trump era ~R+16
-    "white_nh": 0.4778,
+    "white_nh": 0.4749,
 
     # Black non-Hispanic: strongly Democratic, typically D+80 to D+90
-    "black_nh": 0.8569,
+    "black_nh": 0.8673,
 
     # Hispanic/Latino: shifted R in 2024 (nationally ~D+20 to D+30 vs. D+40+ in 2020)
     # TX Hispanics in 2024 were approximately even in some districts
-    "hispanic": 0.6327,
+    "hispanic": 0.6503,
 
     # Asian non-Hispanic + other: generally D-leaning, D+10 to D+20
-    "other": 0.4720,
+    "other": 0.4559,
 }
 
 # Metadata — update these when you update the numbers above
-GENERIC_BALLOT_SOURCE = "Multi-source 11-poll racial avg + 0 topline-only"
-GENERIC_BALLOT_UPDATED = "2026-10-07"  # ISO date
+GENERIC_BALLOT_SOURCE = "Multi-source 3-poll racial avg + 0 topline-only"
+GENERIC_BALLOT_UPDATED = "2026-10-27"  # ISO date
 
 # Topline D 2p share at last update — used by update_polling.py to compute shifts
 # when Civiqs racial crosstabs aren't available. Computed as Σ(weight × D_share).
 # Run update_polling.py to refresh automatically.
-GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5458  # D+9.2pp (implied by racial shares above)
+GENERIC_BALLOT_TOPLINE_D_2P: float = 0.5460  # D+9.2pp (implied by racial shares above)
 
 # ---------------------------------------------------------------------------
 # National Demographic Weights (2024 exit poll / electorate composition)
@@ -272,14 +272,14 @@ VIABILITY_THRESHOLD: dict[str, float] = {}
 
 IE_COEFFICIENT:   float = 0.0089    # clean-cycle open-baseline refit, 2026-10-07 (t 1.1); was 0.026 earlier that day, 0.074 before
 IE_MIN_THRESHOLD: float = 50_000    # $50K minimum total IEs for signal to apply
-IE_WEIGHT:        float = 1.0       # October 30-day-before reports in (was 0.75 post-July)
-IE_DATA_THROUGH:  str   = "2026-10-07"  # update when re-running collect_ies_2026.py
+IE_WEIGHT:        float = 1.0       # October 30-day and 8-day-before reports in (was 0.75 post-July)
+IE_DATA_THROUGH:  str   = "2026-10-27"  # update when re-running collect_ies_2026.py
 
 # ---------------------------------------------------------------------------
 # Finance data currency
 # ---------------------------------------------------------------------------
-FINANCE_DATA_THROUGH = "2026-10-05"  # last TEC filing deadline captured (30-day-before-general report)
-FINANCE_CUTOFF_POSTPRIMARY = "20261007"  # include all reports filed through today (Oct 5 30-day-before-general reports)
+FINANCE_DATA_THROUGH = "2026-10-26"  # last TEC filing deadline captured (8-day-before-general report)
+FINANCE_CUTOFF_POSTPRIMARY = "20261027"  # include all reports filed through today (Oct 26 8-day-before-general reports)
 
 # ---------------------------------------------------------------------------
 # Auto-select national_env coefficient based on finance data currency

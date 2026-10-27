@@ -49,7 +49,7 @@ import os
 import re
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -490,9 +490,45 @@ def _nominee_party(chamber: str, district: int, candidate_name: str) -> str | No
     if not noms or not candidate_name.strip():
         return None
     cn = _normalize_name(candidate_name)
-    matches = [p for p in ("R", "D")
-               if noms[p] and (cn == noms[p] or _name_match(cn, noms[p]))]
+    # An exact name wins outright: HD 35's nominees are both named Oscar, so a
+    # loose match on "Oscar Longoria" hit both and returned nothing.
+    exact = [p for p in ("R", "D") if noms[p] and cn == noms[p]]
+    if len(exact) == 1:
+        return exact[0]
+    matches = [p for p in ("R", "D") if noms[p] and _name_match(cn, noms[p])]
     return matches[0] if len(matches) == 1 else None
+
+
+def _opposes_named(purpose: str, candidate_name: str) -> bool:
+    """
+    True when the purpose text opposes the candidate the row is filed under
+    ("Oppose - Brittany Black"), not someone else ("Mail supporting Scott
+    Bowen and opposing Albert Wittliff", filed under Bowen).
+    """
+    p = purpose.lower()
+    i = p.find("oppos")
+    if i < 0:
+        return False
+    last = candidate_name.lower().split()[-1] if candidate_name.strip() else ""
+    return bool(last) and last in p[i:]
+
+
+def _load_beneficiary_overrides() -> dict[tuple, tuple]:
+    """
+    config/dce_beneficiary_overrides.csv: DCE rows where the filer typed the
+    wrong district/office or a name form the nominee matcher can't resolve.
+    (chamber, district, normalized raw name) → (chamber, district, name).
+    """
+    path = ROOT / "config" / "dce_beneficiary_overrides.csv"
+    if not path.exists():
+        return {}
+    with open(path, newline="", encoding="utf-8") as f:
+        return {
+            (r["raw_chamber"].strip().lower(), int(r["raw_district"]),
+             _normalize_name(r["raw_candidate_name"])):
+            (r["chamber"].strip().lower(), int(r["district"]), r["candidate_name"].strip())
+            for r in csv.DictReader(f)
+        }
 
 
 def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
@@ -516,7 +552,7 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
         return []
 
     text = data.decode(TEC_ENCODING, errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
+    reader = list(csv.DictReader(io.StringIO(text)))
 
     # A corrected report re-itemizes every expenditure under a new
     # reportInfoIdent while TEC keeps the original, so the same spending
@@ -525,8 +561,20 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
     # legislative DCE, incl. $59,683 of RPT spending in SD 4.
     superseded = superseded_report_ids(cd)
 
+    # One expenditure that benefits several candidates is one row per
+    # candidate in cand.csv, each carrying the FULL expendAmount (all 8,169
+    # multi-candidate expenditures, checked 2026-10-27). Split it evenly
+    # across every listed beneficiary, any office. Before this, Texas Now
+    # PAC's single $365,330 media buy counted in full in each of nine House
+    # districts, and 2026 legislative DCE read $30.9M classified instead of $9.7M.
+    beneficiaries = Counter(
+        r.get("expendInfoId", "") for r in reader
+        if r.get("reportInfoIdent", "") not in superseded
+    )
+
     # Load filer party lookup
     filer_parties = _load_dce_filer_parties()
+    overrides = _load_beneficiary_overrides()
 
     rows = []
     skipped = 0
@@ -566,32 +614,44 @@ def load_dce_expenditures(cd: dict, verbose: bool = False) -> list[dict]:
         if amount <= 0:
             skipped += 1
             continue
+        amount /= max(beneficiaries[row.get("expendInfoId", "")], 1)
 
         filer_name = row.get("filerName", "").strip()
         filer_id = row.get("filerIdent", "").strip()
         cand_first = row.get("candidateNameFirst", "").strip()
         cand_last = row.get("candidateNameLast", "").strip()
         candidate_name = f"{cand_first} {cand_last}".strip()
+        override = overrides.get((chamber, district, _normalize_name(candidate_name)))
+        if override:
+            chamber, district, candidate_name = override
 
-        # Classify direction using filer party lookup, then fall back to the
-        # BENEFICIARY's party: DCE rows name the candidate the spending
-        # supports, and matching them against the 2026 nominee roster is more
-        # reliable than filer reputation (Border Health PAC's $10K backed an
-        # HD41 primary loser — filer-party classification would have mis-
-        # signed it; nominee matching correctly leaves it out).
+        # Classify direction by the BENEFICIARY first: DCE rows name the
+        # candidate the spending supports, and the 2026 nominee roster is more
+        # reliable than filer reputation. Spending naming someone who is not
+        # a nominee (primary losers: Legacy 44's $36K for Seby Haddad in HD 41,
+        # Border Health PAC's $10K likewise) is not general-election signal
+        # and stays unclassified whatever the filer's party. The filer lookup
+        # decides only when no candidate is named. Audited 2026-10-27: filer-
+        # first had signed Texas REALTORS' gifts to ~59 D nominees as R.
+        purpose = row.get("expendDescr", "").strip()
+        beneficiary_party = _nominee_party(chamber, district, candidate_name)
         filer_party = filer_parties.get(filer_name.upper())
-        if filer_party in ("R", "D"):
+        if beneficiary_party in ("R", "D"):
+            if _opposes_named(purpose, candidate_name):
+                # AFC Victory Fund files its attack ads under the target:
+                # "IE - Digital - Oppose - Brittany Black - HD 61".
+                beneficiary_party = "D" if beneficiary_party == "R" else "R"
+                method = "beneficiary_oppose"
+            else:
+                method = "beneficiary_nominee"
+            direction = f"{beneficiary_party}_favor"
+        elif not candidate_name and filer_party in ("R", "D"):
             direction = f"{filer_party}_favor"
             method = "dce_filer_lookup"
         else:
-            beneficiary_party = _nominee_party(chamber, district, candidate_name)
-            if beneficiary_party in ("R", "D"):
-                direction = f"{beneficiary_party}_favor"
-                method = "beneficiary_nominee"
-            else:
-                direction = "unknown"
-                method = "unclassified"
-                unclassified_filers[filer_name] += amount
+            direction = "unknown"
+            method = "non_nominee" if candidate_name else "unclassified"
+            unclassified_filers[filer_name] += amount
 
         rows.append({
             "chamber":               chamber.title(),
