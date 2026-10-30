@@ -15,6 +15,79 @@ Datawrapper House v9, Senate v8, WAR v8, verified with check_live_embeds.py).
 See "October 8-day refresh" below; the refit and model spec are in the
 2026-10-07 sections.*
 
+*2026-10-28: no model change. "Where the majority line sits" below records
+how far right of the nation the model puts Texas, the 2018-analog fit, and one
+open publishing decision.*
+
+---
+
+## Where the majority line sits, and the 2018 analog (2026-10-28)
+
+Analysis only; the published model is unchanged. Scripts in `scripts/`, all
+reproduced 2026-10-30.
+
+**Threshold.** A 50% House majority needs about **D+18** nationally (D+12 →
+69.1 seats / 20.8%, D+15 → 73.0 / 35.3%, D+18 → 77.3 / 50.4%, D+20 → 80.3 /
+61.1%). Senate is 4.5% at D+18. `majority_threshold_bias.py`: with every seat
+scored at the model's share (`sw_latent`), Texas reaches a 50/50 House vote at
+D+18.4, where Democrats get 77.7 seats / 52% — so at 50/50 the map is close to
+neutral in the model. The 13-point Texas lean is what keeps the majority far
+away, not seat bias. (Earlier in the session I quoted "70 seats at 50/50 = 5
+seats of bias"; that used the district-average convention, which counts turnout
+differences, and was wrong as a bias measure.) The standard metrics in
+`analysis/gerrymander/` still say the House is modestly R-tilted (EG +1.5 to
++4.4%) and the Senate twice that.
+
+**How far right of the nation Texas runs.** `tx_house_lean_vs_nation.py`
+(uncontested seats imputed from presidential + the contested-race gap): TX House
+vote vs the national House vote 2012–2024 = 15.1, 16.9, 16.5, 16.1, 14.1, **8.8**
+(2022), 12.9 points right. The model puts 2026 at about 17 right: the 2024 open
+composite is R+16.7 (14.0 right of the nation's R+2.7) plus ~3 of midterm
+adjustment. `statewide_lean_reproduction.py`: the fitted model reproduces each
+training midterm's lean (2014 15.9 vs 16.9 measured, 2018 15.0 vs 16.1, 2022 8.4
+vs 8.8), so 2022's small gap came from its R+9.5 2020 baseline, not from a
+midterm Texas effect; anchoring 2022 on 2018 would have missed by 7.
+`env_base_level_test.py`: absolute vs differenced environment fit the training
+cycles equally (cycle-level RMSE 0.20 vs 0.16pp); the differenced spec would add
+~+1.6 margin for 2026 (≈13% → 17%). Not identifiable from three cycles.
+
+**The friend's D+12 argument.** Checked: 14 R-held seats are bluer than Trump's
++13.7 statewide (HD 34, 112, 118, 121, 108, 133, 52, 138, 94, 97, 63, 96, 37,
+122) + 61 D-held = 75; HD 74 is 76th. The gap between D+12 and D+18 is ≈1 pt
+generic vs presidential, 2–3 down-ballot vs Trump, ≈3 the model's 2024 base-year
+treatment. Presidential→midterm moves (2012→14, 2016→18, 2020→22) put Texas at
+50/50 around D+12–13 if you believe them, but 2016's House vote is mostly
+imputed (52 of 150 contested); against fully observed composites 2018 ran ~2
+points further from the nation than 2016, which is what the model assumes.
+
+**2018 analog (Brennan: changing circumstances, not a cycle).**
+`analog_2018_forecast.py` fits the shipped spec (with education) on 2018 alone,
+same MC and seed:
+
+| Env | Shipped | 2018 analog | 2018 + Hispanic term |
+|---|---|---|---|
+| D+9.2 | 66.0 / 12.0% | 66.0 / 14.3% | 65.8 / 14.0% |
+| D+12 | 69.1 / 20.8% | 69.5 / 24.2% | 69.3 / 23.7% |
+| D+15 | 72.9 / 34.3% | 73.7 / 38.7% | 73.4 / 38.1% |
+| D+18 | 77.1 / 50.3% | 78.1 / 54.9% | 77.9 / 54.3% |
+
+2018 changes which seats, not how many: bigger white-college suburban swing and
+smaller incumbent cushions (dem_incumbent 0.0066 vs 0.0237 pooled) lift HD 108
+37→54%, 94 23→36, 112, 118, 121 and drop HD 74 68→54, 144 61→47, 35 80→69.
+With education in the fit, 2018's Hispanic residual slope is ≈ −3pp/unit; the
++9.2 seen in `race_shift_test.py` without it was white-college share, so 2018
+gives no evidence of a Hispanic snapback.
+`hispanic_downballot_trend.py`: judicial D 2p in 70%+ Hispanic districts 69.6
+(2012), 69.1 (2016), 62.3 (2020), 52.8 (2024) — the shift reached low-salience
+races and started before inflation. Polls are the only read on 2026 Hispanic
+movement and disagree: UT Oct LV +5 vs 2024 (→ 10.3% if imposed); NYT/Siena 9/30
+and ReconMR 9/11 ≈66% D.
+
+**Open (Brennan):** publish 13% as is, add a stated range (≈13–35%, low end the
+model, high end the D+12–13 reading of Texas's lean), or widen σ_national.
+Separately: apply a poll-based Hispanic shift (which poll) or leave it as a
+sensitivity.
+
 ---
 
 ## October 8-day refresh (2026-10-27)
