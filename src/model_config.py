@@ -146,15 +146,21 @@ BASELINE_SOURCE: str = "open"
 # held-out "cycles" carry the national term, so 0.044 is kept as the safer
 # value.
 
+#
+# Environment is DIFFERENCED since 2026-10-30 (Brennan; scripts/env_differenced_refit.py):
+# the term is coef * (env_dial - ENV_BASELINE_YEAR), the change from the presidential
+# year the baseline comes from, not the absolute generic ballot. The dial itself stays
+# an absolute D-R margin. Fit on the same 212 rows; intercept, slope and the other terms
+# all moved with it. Slope drops 0.0046 -> 0.0034, so the dial pays less per point.
 REGRESSION_COEFFICIENTS: dict[str, float] = {
-    "intercept":                 -0.0334,
-    "dem_pres_2p_baseline":       1.0583,  # pass-through on the BASELINE_SOURCE column
-    "dem_incumbent":              0.0117,
-    "rep_incumbent":              0.0128,
-    "chamber_senate":             0.0095,
-    # national_env: set by _auto_select_env_coef() (both eras 0.0046 after refit).
+    "intercept":                 -0.0265,
+    "dem_pres_2p_baseline":       1.0586,  # pass-through on the BASELINE_SOURCE column
+    "dem_incumbent":              0.0114,
+    "rep_incumbent":              0.0120,
+    "chamber_senate":             0.0099,
+    # national_env: set by _auto_select_env_coef() (both eras 0.0034 after refit).
     "national_env":               None,
-    "challenger_viability_flag":  0.0109,  # SIGNED in training and in model.py
+    "challenger_viability_flag":  0.0110,  # SIGNED in training and in model.py
     "dem_fundraising_share":      0.0,     # dropped 2026-10-07: fails out of sample
     "sigma":                      0.0440,
 }
@@ -270,7 +276,7 @@ VIABILITY_THRESHOLD: dict[str, float] = {}
 #   After October filing → IE_WEIGHT = 1.0
 # !!! UPDATE IE_DATA_THROUGH WHEN RUNNING collect_ies_2026.py !!!
 
-IE_COEFFICIENT:   float = 0.0089    # clean-cycle open-baseline refit, 2026-10-07 (t 1.1); was 0.026 earlier that day, 0.074 before
+IE_COEFFICIENT:   float = 0.0103    # differenced refit, 2026-10-30 (0.0089 before it); was 0.026 earlier that day, 0.074 before
 IE_MIN_THRESHOLD: float = 50_000    # $50K minimum total IEs for signal to apply
 IE_WEIGHT:        float = 1.0       # October 30-day and 8-day-before reports in (was 0.75 post-July)
 IE_DATA_THROUGH:  str   = "2026-10-27"  # update when re-running collect_ies_2026.py
@@ -293,8 +299,9 @@ FINANCE_CUTOFF_POSTPRIMARY = "20261027"  # include all reports filed through tod
 # Set NATIONAL_ENV_COEF_OVERRIDE to force a specific value (bypasses auto).
 NATIONAL_ENV_COEF_OVERRIDE: float | None = None
 
-_ENV_COEF_WITH_PRES = 0.0046   # 2026-10-07 clean-cycle open-baseline refit (was 0.0049); the two eras now agree
-_ENV_COEF_FULL_MODEL = 0.0046  # 2026-10-07 clean-cycle open-baseline refit (was 0.0025)
+_ENV_COEF_WITH_PRES = 0.0034   # 2026-10-30 differenced refit (was 0.0046 absolute); the two eras agree
+_ENV_COEF_FULL_MODEL = 0.0034  # 2026-10-30 differenced refit (was 0.0046 absolute)
+ENV_BASELINE_YEAR: float = -2.7   # national House margin in 2024, the 2026 baseline's year
 
 def _auto_select_env_coef() -> float:
     """Select national_env coefficient based on FINANCE_DATA_THROUGH date."""
@@ -333,15 +340,15 @@ def _auto_select_env_coef() -> float:
 # (src/collect_education_by_district.py). Whole spec refit with the term in.
 # On by default since 2026-10-07; TXLEG_EDU=0 turns it off for one run.
 REGRESSION_COEFFICIENTS_EDU: dict[str, float] = {
-    "intercept":                 -0.0360,
-    "dem_pres_2p_baseline":       1.0521,
-    "dem_incumbent":              0.0244,
-    "rep_incumbent":              0.0097,
-    "chamber_senate":             0.0110,
+    "intercept":                 -0.0290,
+    "dem_pres_2p_baseline":       1.0523,
+    "dem_incumbent":              0.0240,
+    "rep_incumbent":              0.0089,
+    "chamber_senate":             0.0114,
     "national_env":               None,
-    "challenger_viability_flag":  0.0042,
+    "challenger_viability_flag":  0.0044,
     "dem_fundraising_share":      0.0,
-    "white_col_centered":         0.1554,
+    "white_col_centered":         0.1547,
     "sigma":                      0.0440,
 }
 REGRESSION_COEFFICIENTS_NO_FINANCE_EDU: dict[str, float] = {
@@ -354,7 +361,7 @@ REGRESSION_COEFFICIENTS_NO_FINANCE_EDU: dict[str, float] = {
     "white_col_centered":    0.1603,
     "sigma":                 0.0232,
 }
-IE_COEFFICIENT_EDU: float = 0.0122
+IE_COEFFICIENT_EDU: float = 0.0137
 EDUCATION_TERM: bool = os.environ.get("TXLEG_EDU", "1") != "0"
 if EDUCATION_TERM:
     REGRESSION_COEFFICIENTS.clear()

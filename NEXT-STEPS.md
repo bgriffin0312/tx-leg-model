@@ -15,16 +15,72 @@ Datawrapper House v9, Senate v8, WAR v8, verified with check_live_embeds.py).
 See "October 8-day refresh" below; the refit and model spec are in the
 2026-10-07 sections.*
 
+*2026-11-02: **Bigger-than-2018 scenario run** (`scripts/early_vote/focus_2026.py`, results in `docs/whole-election-model.md`): 2018's swing plus one is T -7.15 from 2024, weaker than the -6.0 read, or T +3.1 midterm to midterm. Focusing it on polls' race pattern adds at most a seat and cuts P(76+) in every case. The education sensitivity is still to run.*
+
+*2026-11-02: **Primary-history panel added** (`scripts/early_vote/ryan_history.py`, Derek Ryan's reports in `data/raw/early_vote/ryan/`): final gaps 2016-2024 on one definition, 2018 R+13.9 against 2022 R+10.8. The early vote reads about -10 to +3 on the judicial scale depending on which midterm's no-primary margin holds, so it no longer confirms -7. T left at -6.0. After Nov 3, add 2026 to the panel and test his county history files against county swing.*
+
+*2026-11-01: **Early vote read built** (`scripts/early_vote/`, results in `docs/whole-election-model.md`): T near -6, between the two versions, Tarrant the one robust county shift. No model change. After Nov 3, score it and add 2026 as a third point.*
+
+*2026-11-01: **2018 undershoot tested** (`scripts/wave_2018/`, results in `docs/whole-election-model.md`): logit swing, coattails, wave-by-education,
+elasticity by lean, split and higher slopes all failed or were in-sample only. No model change. After Nov 3, score the R-held close seats as a group.*
+
+*2026-10-31: **whole-election backtest run** on 2018, 2022, 2024: `scripts/whole_election_backtest.py`, results in
+`docs/whole-election-model.md`. All 18 chamber bands held the result; it cannot pick between the two versions, and it does not settle
+the shared error (about 3:1 for the smaller one). `electorate()` fixed: 41 contested seats had no place draw.*
+
 *2026-10-28: no model change. "Where the majority line sits" below records
 how far right of the nation the model puts Texas, the 2018-analog fit, and one
 open publishing decision.*
+
+*2026-10-30: new statewide + congressional model (separate from the legislative
+model), `docs/statewide-congress-model.md`. Its Texas party margin T is −4.7 ± 2.7
+after polls.*
+
+*2026-10-30: **environment term differenced (Brennan)**, see the next section. D+9.2
+now gives 67.1 House seats / 14.9% majority, Senate 11.2 / 0.3%. **Not published:** the
+live charts and Datawrapper still show 66.2 / 13.1% until `publish_charts.ps1` runs.*
+
+*2026-10-30: **county races added (Brennan)**: nine county judges and the Bexar DA on the
+legislative formula, `docs/county-race-model.md`. After Nov 3, score them and re-test the
+open-seat term.*
+
+---
+
+## Environment term differenced (2026-10-30)
+
+Brennan's decision after the statewide model sat 3 points left of this one. The term
+is now coef × (dial − 2024's −2.7), not coef × dial; the dial stays an absolute margin.
+`scripts/env_differenced_refit.py`; full refit on the same 212 rows, so all coefficients
+moved and `src/model_config.py` holds them. Slope 0.0046 → 0.0034. WAR is untouched: its
+baseline has a cycle fixed effect, so the level change does not reach it.
+
+| Dial | Before | After |
+|---|---|---|
+| D+7 | 63.3 / 6.7% | 65.3 / 10.3% |
+| D+9.2 | 66.0 / 12.0% | 67.1 / 14.9% |
+| D+12 | 69.1 / 20.8% | 69.3 / 21.9% |
+| D+15 | 73.0 / 35.3% | 72.3 / 32.0% |
+| D+18 | 77.3 / 50.4% | 75.3 / 43.4% |
+
+The curves cross near D+13.5. The change adds about 1.1 statewide margin at D+9.2
+(R+8.3 → about R+7.2), not the 1.6 first quoted: that figure was from the spec without
+education. About 2.5 points of the gap to the statewide model remain. The dial now pays
+~0.8–1.0 seats per point; 50/50 statewide on `sw_latent` moves D+18.4 → D+20.3.
+
+**Evidence, stated plainly.** The plain leave-one-cycle-out cannot judge this form:
+without 2018 the training changes are −6.9 and −5.9, the slope is unidentified and 2018
+misses by 14pp. With the slope fixed, levels: absolute rms 0.44pp, differenced 0.96pp
+(2014, 8 seats, is most of it); House seat error about equal (2018 −2.1 vs −1.8, 2022
+−0.1 vs −0.7). So differenced is modestly worse on three cycles, and the 0.0034 slope
+sits below the 0.92–0.95 margin per point the 11 statewide transitions give. Re-test
+both on 2026 results.
 
 ---
 
 ## Where the majority line sits, and the 2018 analog (2026-10-28)
 
-Analysis only; the published model is unchanged. Scripts in `scripts/`, all
-reproduced 2026-10-30.
+Analysis on the absolute-environment spec; the seat figures in this section predate the
+2026-10-30 differenced refit, under which 50% needs about D+20. Scripts in `scripts/`.
 
 **Threshold.** A 50% House majority needs about **D+18** nationally (D+12 →
 69.1 seats / 20.8%, D+15 → 73.0 / 35.3%, D+18 → 77.3 / 50.4%, D+20 → 80.3 /
@@ -185,7 +241,7 @@ moves them +5.4.
 ## The refit decision — DECIDED 2026-10-07
 
 Adopted: the open-race baseline, the clean-cycle refit (pass-through 1.058,
-env 0.0046, sigma 0.044), deletion of the demographic level term and the TX
+env 0.0046 absolute, replaced by the differenced 0.0034 on 2026-10-30, sigma 0.044), deletion of the demographic level term and the TX
 Hispanic constant, incumbency and the signed viability flag after out-of-sample
 tests (fundraising share dropped), IE re-estimated at 0.0089, WAR rebuilt on
 the open baseline with a cycle fixed effect. Full record, test results and the
@@ -525,9 +581,10 @@ it is not district polling.
   district. Returns exist (`ftp_election_data_12g.zip` carries 1996–2014) but
   TLC precinct geometry *and* RED-365 crosswalks both stop at the 2010 general,
   so those precincts cannot be districted at all.
-- **Extending WAR before 2018.** Candidate *names* only appear from 2018 on;
-  earlier articles are summary tables with votes by party. The Texas SoS Race
-  Summary Report does carry names and is reachable, but tested against value:
+- **Extending the legislative WAR before 2018.** The Wikipedia articles it is built
+  on have names only from 2018; TLC VTD returns carry surnames back to 2002 (used by
+  `src/statewide_war.py`), and the Texas SoS Race Summary Report has them too.
+  Tested against value for the legislative model:
   only **11 of 166** on-ballot incumbents hold all four available cycles, three
   of those were first elected in 2018, and of the remaining eight only **Angie
   Chen Button (HD 112, 22.7%)** sits in a seat competitive enough to matter.
@@ -536,3 +593,9 @@ it is not district polling.
   moves full-sample σ 0.0255 → 0.0287 and worsens out-of-sample MAE on two of
   three midterms. They stay in the dataset (WAR uses them; they give the env
   term five identifying values) but the midterm coefficients stay midterm-fit.
+
+## Whole-election model (2026-10-31)
+
+Built at Brennan's direction: one electorate per run across all 222 races, in a statewide and a
+legislative version. See `docs/whole-election-model.md`. Published charts are unchanged. After
+Nov 3, score both versions and re-run `scripts/whole_election_estimates.py`.

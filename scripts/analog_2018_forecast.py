@@ -64,7 +64,7 @@ hisp_c = M.centered_group_shares(df)[:, M._GROUPS.index("hispanic")]
 
 def apply(f, hisp=0.0):
     M.COEFS.update({
-        "intercept": f["const"] - ENV_COEF * 8.6,   # reproduces 2018's level at env 8.6
+        "intercept": f["const"] - ENV_COEF * (8.6 - M.ENV_BASELINE_YEAR),   # reproduces 2018's level at env 8.6
         "dem_pres_2p_baseline": f["x"], "dem_incumbent": f["dem_incumbent"],
         "rep_incumbent": f["rep_incumbent"], "chamber_senate": f["chamber_senate"],
         "challenger_viability_flag": f["challenger_viability_flag"],

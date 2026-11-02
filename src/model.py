@@ -59,6 +59,7 @@ from model_config import (
     RACE_GENERIC_BALLOT_D_SHARE,
     NATIONAL_DEMO_WEIGHTS,
     REGRESSION_COEFFICIENTS as COEFS,
+    ENV_BASELINE_YEAR,
     ENV_SCENARIOS,
     N_SIMULATIONS,
     HOUSE_MAJORITY,
@@ -550,9 +551,9 @@ def build_linear_predictions(df: pd.DataFrame,
     predicted = (
         COEFS["intercept"]
         + COEFS["dem_pres_2p_baseline"] * pres_baseline.fillna(national_avg)
-        # env_dial is absolute D-R margin in pp, matching regression
-        # training data (2018=8.6, 2022=-2.8, 2024=-3.2)
-        + COEFS["national_env"] * env_dial                   # environment swing
+        # env_dial is absolute D-R margin in pp; the term is its change from the
+        # baseline's presidential year, as in training (model_config.ENV_BASELINE_YEAR)
+        + COEFS["national_env"] * (env_dial - ENV_BASELINE_YEAR)  # environment swing
         + COEFS["dem_incumbent"] * dem_inc
         + COEFS["rep_incumbent"] * rep_inc
         + COEFS["chamber_senate"] * chamber_senate
