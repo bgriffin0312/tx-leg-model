@@ -319,6 +319,24 @@ all three county baselines (+1.5 after centering): county judge 55% to 65%, HD 9
 19% to 27%, HD 96 13% to 19%. Harris moves +1.3 but the baselines split (0.2 and 2.4), so HD 144, 133
 and 138 are weaker.
 
+**SD-9 slice (2026-11-03).** `scripts/early_vote/sd9_slice.py`. ColdSpark's Oct 30 Tarrant precinct
+file, mapped to PlanS2168 with `precincts24g_districts.xlsx`. 196 precincts renumbered since 2024 have no
+crosswalk, so 77% of Tarrant early votes map. Matched precincts, modeled party, mail plus in person:
+
+| | Early net | Registration net | Trump 2024 | Judicial 2024 | Early minus Trump |
+|---|---|---|---|---|---|
+| SD-9 | R+10.9 | R+10.7 | R+17.9 | R+21.4 | -7.0 |
+| Rest of Tarrant | D+7.0 | D+3.6 | D+4.7 | D+1.6 | -2.3 |
+| Tarrant, matched | R+2.4 | R+4.1 | R+7.5 | R+10.7 | -5.0 |
+
+Turnout in SD-9: modeled D 59.5%, R 53.1%. A precinct fit of early net on the Trump margin leaves SD-9 at
+-2.25. The pool not yet voted in SD-9 is R 84,628, D 49,666, O 200,049. Rehmet's chance is 1.3% (legislative
+version), 3.5% (statewide) and 4.7% (Oct 27 publish), mean about -11 to -13 at sd 5.9. Tarrant's +1.5 plus
+SD-9's extra at 0.5 per point is about +2.5 margin, roughly 5 to 10%. A one-to-one read using Tarrant's
+2022 and 2024 early-net-to-judicial offsets gives about R+7 and 12%, which the county backtest says
+overstates it. The precinct comparison is a levels signal and is untested. The bigger open question is the
+model's treatment of Rehmet as an open-seat candidate with no credit for the January runoff.
+
 ## A swing bigger than 2018, focused by the polls (2026-11-02)
 
 `scripts/early_vote/focus_2026.py`. A conditional, not a forecast. The judicial vote swung 8.2 from

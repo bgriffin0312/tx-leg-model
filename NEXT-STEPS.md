@@ -15,6 +15,8 @@ Datawrapper House v9, Senate v8, WAR v8, verified with check_live_embeds.py).
 See "October 8-day refresh" below; the refit and model spec are in the
 2026-10-07 sections.*
 
+*2026-11-03: **SD-9 early-vote slice** (`scripts/early_vote/sd9_slice.py`, results in `docs/whole-election-model.md`): SD-9's early electorate is modeled R+10.9 against Trump +17.9 in the same precincts, moving 2 to 5 points more than the rest of Tarrant. At 0.5 per point that is about +2.5 margin for Rehmet: roughly 5 to 10% from 1.3 to 4.7%. Only 77% of Tarrant early votes map to a district. No model change. After Nov 3, score it and test whether Rehmet's January runoff result should have entered the model.*
+
 *2026-11-02: **Bigger-than-2018 scenario run** (`scripts/early_vote/focus_2026.py`, results in `docs/whole-election-model.md`): 2018's swing plus one is T -7.15 from 2024, weaker than the -6.0 read, or T +3.1 midterm to midterm. Focusing it on polls' race pattern adds at most a seat and cuts P(76+) in every case. The education sensitivity has no result: the 40,000-draw run was stopped for low memory on 11/2 before it wrote anything, and it was not restarted.*
 
 *2026-11-02: **Primary-history panel added** (`scripts/early_vote/ryan_history.py`, Derek Ryan's reports in `data/raw/early_vote/ryan/`): final gaps 2016-2024 on one definition, 2018 R+13.9 against 2022 R+10.8. The early vote reads about -10 to +3 on the judicial scale depending on which midterm's no-primary margin holds, so it no longer confirms -7. T left at -6.0. After Nov 3, add 2026 to the panel and test his county history files against county swing.*
