@@ -351,7 +351,7 @@ vote with no Hispanic slope (-0.18 per unit, partisan polls discounted 2). UT, s
 urban -5.1, suburban +5.0, rural -0.2. By education: college about +3.8, non-college about -1.7, on
 subgroups of 100 to 200. The formula's midterm white-college term is 0.16 two-party, about 32 margin per
 unit of share, against about 11 for UT's gap, so the model already holds more than that crosstab shows, and
-an education pattern on top counts some of it twice. That run was queued at 40,000 draws and is not in the
+an education pattern on top counts some of it twice. That run did not finish, so education is not in the
 table.
 
 ## After Nov 3

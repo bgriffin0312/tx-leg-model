@@ -157,6 +157,28 @@ Denton 2022 (D derived from 59.4% R), Bexar 2014, Travis 2022 and Galveston 2022
 Galveston 2014. No D-vs-R contest: Tarrant 2014, Harris 2014, Denton 2014, Montgomery 2014,
 Travis 2018, Galveston 2018, El Paso 2014, 2018 and 2022.
 
+## Williamson Precinct 4 commissioner (2026-11-02, Brennan)
+
+`scripts/county_commissioner_wilco.py`. Boles (R, inc) v Rhea (D), write-in Flores, the only
+contested commissioner race: Precinct 2 is McDonald (R) unopposed and Precincts 1 and 3 are not up.
+It is read off the county race, not simulated in the whole-election model. Precinct 4 is 25.5% of the
+county and ran 3.6 right of it on the judicial vote in 2022, 2.8 in 2024, on 40 precincts. Before the
+2021 lines it ran left of the county, so older offsets do not carry. Six Precinct 2 and 4 races, 2014 to
+2022, ran 1.2 right of the judicial vote on their own precincts, spread 1.4; the error here is floored
+at 3 because six races is thin. No finance is on file for either candidate.
+
+Three means at T -6.0: the county race with the offset +3.1, Boles's 2022 margin plus the county's
+swing +1.0, and the judicial vote directly +0.2. The direct one is the most grounded, since the county
+judge mean sits about 2 points left of Williamson's judicial reading. Rhea's chance on the average of
+the three is 52% at T -7.15, 61% at T -6.0, 70% at T -4.8, 98% at T +3.1, and 42%, 52%, 61%, 97% on the
+direct one alone.
+
+Court control turns on this race. Terry Cook (D, Precinct 1) and Valerie Covey (R, Precinct 3) are not up,
+and McDonald (R) takes Precinct 2 unopposed, so Republicans hold two seats and Democrats one before the
+two contested votes. Jefts and Rhea together make a 3-2 Democratic majority, from 4-1 Republican today:
+51.5% at T -7.15, 60% at T -6.0, 69% at T -4.8, 98% at T +3.1, and 42%, 51%, 61%, 97% on the direct read.
+Rhea rarely wins without Jefts, so those run within a point of Rhea's own chance.
+
 ## After Nov 3
 
 Score all ten against results, with and without the money term, and test the seat term
