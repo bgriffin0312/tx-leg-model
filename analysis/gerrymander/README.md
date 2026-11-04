@@ -114,12 +114,14 @@ instead, and the enacted map is scored separately for placement in the resulting
 cross-check against Phase A's officially-sourced numbers (Texas Legislative Council's own
 precinct-to-district crosswalk) printed at run time.
 
-**Caveats that bound how strong Phase C's claim can be** (both push toward UNDERSTATING how extreme
-the enacted map is, i.e. this is a conservative/lower-bound test):
+**Caveats that bound how strong Phase C's claim can be** (this is not a lower-bound test; an earlier
+version of this note said both caveats made it conservative, but the first one runs the other way):
 - **Unconstrained ensemble**: no Voting Rights Act minority-opportunity-district preference, so the
-  "neutral" baseline may run a higher Dem-seat count than a VRA-compliant neutral map would.
+  "neutral" baseline may run a higher Dem-seat count than a VRA-compliant neutral map would. That
+  makes the enacted map look MORE extreme than it would against a VRA-compliant ensemble.
 - **No Texas House county-line rule** (Tex. Const. art. III, sec. 26): the enacted House map is
   legally constrained to respect county boundaries where population allows; this ensemble isn't.
+  Imposing it makes the enacted map look more extreme, not less (see "House with the county-line rule" below).
 
 **Ensemble settings:** House ran 20,000 ReCom plans at the standard 2% population-balance tolerance.
 Senate could not run at that tolerance -- with ~940,000 people per district (vs. ~194,000 for House),
@@ -168,6 +170,40 @@ more pro-Republican than every single sampled neutral plan.)
 
 Outputs: `outlier_summary_{house,senate}.csv`, `outlier_{house,senate}_{2020,2024}_{seats,eg}.png`,
 `ensemble_house_steps20000.csv`, `ensemble_senate_steps15000_eps0.05.csv`, `ensemble_graph.pkl`.
+
+### House with the county-line rule (2026-11-04)
+
+`ensemble/county_line_chain.py`, `ensemble/analyze_countyline.py`. The Texas House must follow county lines
+(Tex. Const. art. III, sec. 26), which the ensemble above ignored. This run imposes it:
+
+- **County groups fixed at the enacted plan's.** Two counties share a group when an enacted district touches both,
+  read from TLC's own precinct crosswalk (`precincts24g_districts.xlsx`, PlanH2316): 49 groups, 25 of them a single
+  district, 24 holding the other 125. No sampled district crosses a group line, and each group keeps its number of
+  districts.
+- **Counties the enacted plan keeps whole stay whole** (collapsed to one node). The 25 counties it splits stay at
+  VTD level, and ReCom prefers cuts on county lines inside a group (`region_surcharge`).
+- **Population within ±5%** of the ideal (Texas House practice), not the ±2% used above. A plain ±5% ensemble with
+  the same chain settings and no county rule isolates the rule's effect from the tolerance change.
+- Two county-line chains of 20,000 plans from different random seeds, first 2,000 of each dropped. The two agree
+  (mean 60.1 vs 59.8 Democratic seats). Sampled plans cut county lines about as often as the enacted plan
+  (21–25 county-crossing pieces vs 20), so the rule is being followed about as tightly as the legislature did.
+
+**Result: the county-line rule makes the enacted map look more extreme, not less.** On 2024 presidential lean,
+no county-line plan out of 36,000 is as pro-Republican as the enacted map on any of the five measures:
+
+| ensemble | mean Dem seats (5–95%) | enacted beyond, seats | mean EG | enacted beyond, EG |
+|---|---|---|---|---|
+| county-line, ±5% (2 chains) | 60.0 (57–63) | 100% | −0.004 | 100% |
+| plain, ±5% | 58.5 (54–62) | 95.9% | +0.006 | 98.8% |
+| plain, ±2% (July) | 56.7 (53–60) | 89.9% | +0.017 | 97.9% |
+
+Enacted: 54 Democratic seats, EG +0.044. Mean-median, partisan bias and declination give the same ranking, with the
+enacted map beyond 100% of county-line plans on each (`outlier_summary_house_countyline.csv`,
+`outlier_house_countyline_2024.png`).
+
+What this tests and what it doesn't: it tests line-drawing inside the legislature's own county groups. The choice of
+groups is held fixed, so any partisan effect from that choice is not measured. There is still no Voting Rights Act
+constraint; a VRA-compliant neutral ensemble could give Democrats fewer seats and narrow the gap.
 
 ## Reuse
 
